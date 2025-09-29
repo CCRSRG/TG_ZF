@@ -80,6 +80,13 @@ python TG_ZF.py
 Please enter your phone (or bot token): +86 186xxxxxxxxxx
 Please enter the code you received: 收到的验证码
 # 初次运行会扫描目标频道的资源生成hash值用于去重，需要等待扫描完成
+# 转发信息100条提示一次
+📊 预计剩余待转发: 7367 条消息
+📊 历史转发统计: 总计 487 条 (单条: 487, 相册: 0)
+📈 进度: 100 条 | ✅ 转发:89 🚫 广告:2 🗑️ 内容:0 🔄 重复:1 📚 跳过相册:2 ❌ 错误:0
+# 速度可以修改下面两个参数调整
+delay_single = 2          # 单条消息延迟（秒）
+delay_group = 4           # 相册延迟（秒）
 # 仅导出账号频道信息
 python TG_ZF.py export
 ```
