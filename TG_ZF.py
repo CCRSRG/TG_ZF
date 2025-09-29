@@ -7,8 +7,6 @@ from telethon import TelegramClient, errors
 
 # ============ 配置 ============
 # 全局代理配置（可选）
-# 设置为 None 表示不使用代理
-# 所有账号都会使用此代理配置
 global_proxy = None  # 设置为 None 表示不使用代理
 
 # 代理配置示例（取消注释并修改为您的代理信息）：
