@@ -48,7 +48,7 @@ accounts = [
 # 资源频道：# -100XXXXXXXX, 频道ID  # "@example_channel",频道用户名  # "https://t.me/example_channel",频道链接
 preset_source_channels = []
 #转发信息目标频道
-preset_target_channel = -100XXXXXXXX
+preset_target_channel = -100123456789
 
 # 自动导出配置，仅使用导出功能：python TG_ZF.py export
 auto_export_channels = False  # 设置为 True 时，程序启动时自动导出频道信息
