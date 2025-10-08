@@ -59,7 +59,7 @@ enable_smart_account_switch = True  # 是否启用智能账号切换（自动跳
 
 max_messages = None       # None 表示全部消息
 delay_single = 2          # 单条消息延迟（秒）
-delay_group = 4           # 相册延迟（秒）
+delay_group = 2           # 相册延迟（秒）
 forward_history_file = "forward_history.json"  # 转发历史记录文件（包含进度）
 batch_progress_interval = 100  # 批量进度显示间隔（条消息）
 
@@ -104,6 +104,13 @@ dedup_history_file = "dedup_history.json"  # 去重历史记录文件
 target_channel_scan_limit = None  # 目标频道扫描范围（条消息），None表示扫描所有
 verbose_dedup_logging = False  # 是否显示详细的去重日志（True=显示每个重复相册，False=只在批量统计时显示）
 # 去重策略：相册以整个相册组作为hash值判断，单条消息基于媒体文件进行判断
+# ==========================================
+
+# ============ 关联频道配置 ============
+enable_linked_channel_support = True  # 是否启用关联频道支持
+force_forward_linked_channels = True  # 是否强制转发关联频道（跳过访问权限检查）
+# 关联频道：这些频道可能是其他频道的关联频道，你的账号没有加入但内容可以转发
+# 启用后，程序会尝试直接转发这些频道的内容，即使无法获取频道实体
 # ==========================================
 
 # ============ 常量定义 ============
@@ -1176,7 +1183,14 @@ def get_dedup_stats():
 # ---------- 频道解析和验证函数 ----------
 def get_channel_name(entity):
     """安全地获取频道/群组名称"""
-    return getattr(entity, 'title', None) or getattr(entity, 'name', None) or "未知频道"
+    if hasattr(entity, 'title') and entity.title:
+        return entity.title
+    elif hasattr(entity, 'name') and entity.name:
+        return entity.name
+    elif hasattr(entity, 'id'):
+        return f"频道 {entity.id}"
+    else:
+        return "未知频道"
 
 def parse_channel_identifier(channel_id):
     """解析频道标识符，支持多种格式"""
@@ -1218,29 +1232,57 @@ async def get_channel_by_identifier(client, channel_id):
         return None
 
 async def validate_preset_channels(client, source_channels, target_channel):
-    """验证预设频道是否存在且可访问"""
+    """验证预设频道是否存在（跳过访问性检查，在实际转发时再判断）"""
     validated_sources = []
     validated_target = None
     
-    # 验证源频道
+    # 验证源频道 - 只检查频道是否存在，不检查访问权限
     if source_channels:
         for i, channel_id in enumerate(source_channels, 1):
-            print(f"  {i}. 验证频道: {channel_id}")
+            print(f"  {i}. 检查频道: {channel_id}")
             entity = await get_channel_by_identifier(client, channel_id)
             if entity:
                 validated_sources.append(entity)
-                # 获取频道名称
                 entity_name = get_channel_name(entity)
+                print(f"     ✅ 频道存在: {entity_name}")
             else:
-                print(f"     ❌ 失败: 无法访问频道 {channel_id}")
+                # 如果启用了关联频道支持，即使无法获取频道实体也尝试创建dialog对象
+                if enable_linked_channel_support:
+                    print(f"     🔗 关联频道模式：无法获取频道实体，将在转发时尝试直接转发: {channel_id}")
+                    # 创建一个临时的dialog对象用于后续处理
+                    try:
+                        # 尝试直接使用频道ID创建dialog对象
+                        temp_dialog = type('Dialog', (), {
+                            'id': channel_id,
+                            'entity': None,
+                            'title': f"关联频道 {channel_id}"
+                        })()
+                        validated_sources.append(temp_dialog)
+                        print(f"     ✅ 关联频道已添加: {channel_id}")
+                    except Exception as e:
+                        print(f"     ❌ 无法创建关联频道对象: {channel_id} - {e}")
+                else:
+                    # 即使无法获取频道实体，也尝试创建dialog对象，在实际转发时再判断
+                    print(f"     ⚠️ 无法获取频道实体，将在转发时再次尝试: {channel_id}")
+                    # 创建一个临时的dialog对象用于后续处理
+                    try:
+                        # 尝试直接使用频道ID创建dialog对象
+                        temp_dialog = type('Dialog', (), {
+                            'id': channel_id,
+                            'entity': None,
+                            'title': f"频道 {channel_id}"
+                        })()
+                        validated_sources.append(temp_dialog)
+                    except:
+                        print(f"     ❌ 完全无法处理频道: {channel_id}")
     
-    # 验证目标频道
+    # 验证目标频道 - 必须能够获取到实体
     if target_channel:
         entity = await get_channel_by_identifier(client, target_channel)
         if entity:
             validated_target = entity
-            # 获取频道名称
             entity_name = get_channel_name(entity)
+            print(f"     ✅ 目标频道: {entity_name}")
         else:
             print(f"     ❌ 失败: 无法访问目标频道 {target_channel}")
     
@@ -1265,20 +1307,24 @@ async def export_channels_to_json(client, account_name):
         # 构建频道信息字典
         channel_info = {}
         
-        for dialog in channels:
+        # 获取频道总数
+        total_channels = len(channels)
+        
+        for index, dialog in enumerate(channels, 1):
             try:
                 entity = dialog.entity
                 original_name = entity.title if hasattr(entity, 'title') else "未知频道"
                 # 使用与手动选择相同的ID格式
                 channel_id = dialog.id
                 
-                # 处理频道名字：只显示第一个字和最后一个字，中间用***代替
+                # 处理频道名字：在前面加上频道个数，然后只显示第一个字和最后一个字，中间用***代替
                 if len(original_name) <= 2:
                     # 如果名字只有1-2个字符，直接显示
-                    channel_name = original_name
+                    channel_name = f"{index}/{total_channels} {original_name}"
                 else:
                     # 显示第一个字 + *** + 最后一个字
-                    channel_name = original_name[0] + "***" + original_name[-1]
+                    masked_name = original_name[0] + "***" + original_name[-1]
+                    channel_name = f"{index}/{total_channels} {masked_name}"
                 
                 # 获取完整的频道ID（保持原始格式）
                 full_channel_id = channel_id
@@ -1583,6 +1629,13 @@ async def check_channel_accessibility(src_dialog, dst_dialog, account_name=None)
     if cached_access is not None:
         return cached_access["accessible"], cached_access["reason"]
     
+    # 如果启用了关联频道支持且强制转发，跳过访问权限检查
+    if enable_linked_channel_support and force_forward_linked_channels:
+        print(f"🔗 关联频道模式：跳过访问权限检查，直接尝试转发")
+        result = True, "关联频道（强制转发）"
+        set_channel_access_for_account(account_name, src_dialog.id, True, "关联频道（强制转发）")
+        return result
+    
     try:
         # 尝试获取频道信息
         entity = await client.get_entity(src_dialog.id)
@@ -1602,9 +1655,15 @@ async def check_channel_accessibility(src_dialog, dst_dialog, account_name=None)
                 break
         
         if test_msg is None:
-            result = True, "可访问（无消息）"
-            set_channel_access_for_account(account_name, src_dialog.id, True, "可访问（无消息）")
-            return result
+            # 如果启用了关联频道支持，即使无法获取消息也尝试转发
+            if enable_linked_channel_support:
+                result = True, "关联频道（无消息但可转发）"
+                set_channel_access_for_account(account_name, src_dialog.id, True, "关联频道（无消息但可转发）")
+                return result
+            else:
+                result = True, "可访问（无消息）"
+                set_channel_access_for_account(account_name, src_dialog.id, True, "可访问（无消息）")
+                return result
         
         # 尝试转发一条测试消息来检测受保护聊天
         try:
@@ -1652,14 +1711,26 @@ async def check_channel_accessibility(src_dialog, dst_dialog, account_name=None)
         
     except errors.ChannelPrivateError as e:
         print(f"🔍 账号 {account_name} 频道可访问性检查失败: ChannelPrivateError - {e}")
-        result = False, "频道是私有的"
-        set_channel_access_for_account(account_name, src_dialog.id, False, "频道是私有的")
-        return result
+        # 如果启用了关联频道支持，即使频道是私有的也尝试转发
+        if enable_linked_channel_support:
+            result = True, "关联频道（私有但可转发）"
+            set_channel_access_for_account(account_name, src_dialog.id, True, "关联频道（私有但可转发）")
+            return result
+        else:
+            result = False, "频道是私有的"
+            set_channel_access_for_account(account_name, src_dialog.id, False, "频道是私有的")
+            return result
     except errors.ChannelInvalidError as e:
         print(f"🔍 账号 {account_name} 频道可访问性检查失败: ChannelInvalidError - {e}")
-        result = False, "频道无效"
-        set_channel_access_for_account(account_name, src_dialog.id, False, "频道无效")
-        return result
+        # 如果启用了关联频道支持，即使频道无效也尝试转发
+        if enable_linked_channel_support:
+            result = True, "关联频道（无效但可转发）"
+            set_channel_access_for_account(account_name, src_dialog.id, True, "关联频道（无效但可转发）")
+            return result
+        else:
+            result = False, "频道无效"
+            set_channel_access_for_account(account_name, src_dialog.id, False, "频道无效")
+            return result
     except errors.ChatAdminRequiredError as e:
         print(f"🔍 账号 {account_name} 频道可访问性检查失败: ChatAdminRequiredError - {e}")
         result = False, "需要管理员权限"
@@ -1679,9 +1750,15 @@ async def check_channel_accessibility(src_dialog, dst_dialog, account_name=None)
         error_msg = str(e)
         print(f"🔍 账号 {account_name} 频道可访问性检查失败: {type(e).__name__} - {e}")
         if "invalid channel object" in error_msg.lower():
-            result = False, "频道对象无效"
-            set_channel_access_for_account(account_name, src_dialog.id, False, "频道对象无效")
-            return result
+            # 如果启用了关联频道支持，即使频道对象无效也尝试转发
+            if enable_linked_channel_support:
+                result = True, "关联频道（对象无效但可转发）"
+                set_channel_access_for_account(account_name, src_dialog.id, True, "关联频道（对象无效但可转发）")
+                return result
+            else:
+                result = False, "频道对象无效"
+                set_channel_access_for_account(account_name, src_dialog.id, False, "频道对象无效")
+                return result
         elif "protected chat" in error_msg.lower():
             result = False, PROTECTED_CHAT_REASON
             set_channel_access_for_account(account_name, src_dialog.id, False, PROTECTED_CHAT_REASON)
@@ -1695,9 +1772,15 @@ async def check_channel_accessibility(src_dialog, dst_dialog, account_name=None)
             set_channel_access_for_account(account_name, src_dialog.id, False, "访问被拒绝")
             return result
         else:
-            result = False, f"未知错误: {e}"
-            set_channel_access_for_account(account_name, src_dialog.id, False, f"未知错误: {e}")
-            return result
+            # 如果启用了关联频道支持，其他错误也尝试转发
+            if enable_linked_channel_support:
+                result = True, f"关联频道（未知错误但可转发: {error_msg[:50]}...）"
+                set_channel_access_for_account(account_name, src_dialog.id, True, f"关联频道（未知错误但可转发: {error_msg[:50]}...）")
+                return result
+            else:
+                result = False, f"未知错误: {e}"
+                set_channel_access_for_account(account_name, src_dialog.id, False, f"未知错误: {e}")
+                return result
 
 async def forward_from_single_source(src_dialog, dst_dialog):
     """从单个源频道转发消息到目标频道"""
@@ -1721,7 +1804,14 @@ async def forward_from_single_source(src_dialog, dst_dialog):
         except Exception as entity_e:
             print(f"⚠️ 无法获取频道实体: {entity_e}")
             # 备用方案：直接使用dialog
-            total_messages = await client.get_messages(src_dialog, limit=1)
+            try:
+                total_messages = await client.get_messages(src_dialog, limit=1)
+            except Exception as dialog_e:
+                print(f"⚠️ 无法使用dialog获取消息: {dialog_e}")
+                # 如果都失败了，说明频道确实无法访问
+                print(f"❌ 频道 {get_channel_name(src_dialog)} 无法访问，跳过处理")
+                return create_skipped_result(src_dialog, f"无法访问频道: {dialog_e}")
+        
         if total_messages:
             # 获取第一条消息的ID作为总数估算
             first_msg = total_messages[0]
@@ -1733,6 +1823,7 @@ async def forward_from_single_source(src_dialog, dst_dialog):
     except Exception as e:
         print(f"⚠️ 无法获取源频道消息总数: {e}")
         print(f"🔍 错误详情: 频道ID={src_dialog.id}, 错误类型={type(e).__name__}")
+        # 如果无法获取消息总数，也尝试继续处理，在实际转发时再判断
         estimated_total = 0
     
     # 检查频道可访问性
@@ -1779,7 +1870,24 @@ async def forward_from_single_source(src_dialog, dst_dialog):
             message_iter = client.iter_messages(channel_entity, reverse=True, offset_id=last_forwarded_id, limit=max_messages)
         except Exception as entity_e:
             print(f"⚠️ 无法获取频道实体，使用dialog对象: {entity_e}")
-            message_iter = client.iter_messages(src_dialog, reverse=True, offset_id=last_forwarded_id, limit=max_messages)
+            try:
+                message_iter = client.iter_messages(src_dialog, reverse=True, offset_id=last_forwarded_id, limit=max_messages)
+            except Exception as dialog_e:
+                print(f"❌ 无法使用dialog迭代消息: {dialog_e}")
+                # 如果启用了关联频道支持，尝试直接使用频道ID进行转发
+                if enable_linked_channel_support:
+                    print(f"🔗 关联频道模式：尝试直接使用频道ID进行转发")
+                    try:
+                        # 尝试直接使用频道ID创建消息迭代器
+                        message_iter = client.iter_messages(src_dialog.id, reverse=True, offset_id=last_forwarded_id, limit=max_messages)
+                        print(f"✅ 关联频道模式：成功创建消息迭代器")
+                    except Exception as linked_e:
+                        print(f"❌ 关联频道模式也失败: {linked_e}")
+                        print(f"❌ 频道 {get_channel_name(src_dialog)} 完全无法访问，跳过处理")
+                        return create_skipped_result(src_dialog, f"无法迭代消息: {linked_e}")
+                else:
+                    print(f"❌ 频道 {get_channel_name(src_dialog)} 完全无法访问，跳过处理")
+                    return create_skipped_result(src_dialog, f"无法迭代消息: {dialog_e}")
         
         async for msg in message_iter:
             total_messages += 1
