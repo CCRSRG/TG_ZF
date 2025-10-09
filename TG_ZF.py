@@ -3,121 +3,138 @@ import json
 import os
 import re
 import hashlib
+import sys
 from telethon import TelegramClient, errors
 
-# ============ 配置 ============
-# 全局代理配置（可选）
-# global_proxy = None  # 设置为 None 表示不使用代理
+# ============ 配置加载 ============
+def load_config(config_file=None):
+    """从配置文件加载配置，支持 YAML 和 JSON 格式"""
+    # 自动检测配置文件
+    if config_file is None:
+        if os.path.exists("config.yaml"):
+            config_file = "config.yaml"
+        elif os.path.exists("config.yml"):
+            config_file = "config.yml"
+        elif os.path.exists("config.json"):
+            config_file = "config.json"
+        else:
+            print("❌ 未找到配置文件!")
+            print("请创建以下任一配置文件:")
+            print("  - config.yaml (推荐，支持注释)")
+            print("  - config.json")
+            sys.exit(1)
+    
+    # 检查文件是否存在
+    if not os.path.exists(config_file):
+        print(f"❌ 配置文件 {config_file} 不存在!")
+        sys.exit(1)
+    
+    # 根据文件扩展名加载配置
+    file_ext = os.path.splitext(config_file)[1].lower()
+    
+    try:
+        with open(config_file, 'r', encoding='utf-8') as f:
+            if file_ext in ['.yaml', '.yml']:
+                try:
+                    import yaml
+                except ImportError:
+                    print("❌ 未安装 PyYAML 库!")
+                    print("请运行: pip install pyyaml")
+                    sys.exit(1)
+                
+                try:
+                    config_data = yaml.safe_load(f)
+                    print(f"✅ 已加载配置文件: {config_file}")
+                    return config_data
+                except yaml.YAMLError as e:
+                    print(f"❌ YAML 配置文件格式错误: {e}")
+                    print(f"请检查 {config_file} 文件格式是否正确")
+                    sys.exit(1)
+            elif file_ext == '.json':
+                try:
+                    config_data = json.load(f)
+                    print(f"✅ 已加载配置文件: {config_file}")
+                    return config_data
+                except json.JSONDecodeError as e:
+                    print(f"❌ JSON 配置文件格式错误: {e}")
+                    print(f"请检查 {config_file} 文件格式是否正确")
+                    sys.exit(1)
+            else:
+                print(f"❌ 不支持的配置文件格式: {file_ext}")
+                print("支持的格式: .yaml, .yml, .json")
+                sys.exit(1)
+    except Exception as e:
+        print(f"❌ 加载配置文件失败: {e}")
+        sys.exit(1)
 
-# 代理配置示例（取消注释并修改为您的代理信息）：
-global_proxy = {
-    "proxy_type": "http",  # 代理类型：socks5, socks4, http, mtproto
-    "addr": "127.0.0.1",     # 代理服务器地址
-    "port": 7890,            # 代理端口
-    "username": "",          # 代理用户名（可选，留空表示无需认证）
-    "password": ""           # 代理密码（可选，留空表示无需认证）
-}
+# 加载配置
+config = load_config()
 
+# ============ 从配置文件提取变量 ============
+# 代理配置
+global_proxy = None
+if config["proxy"]["enabled"]:
+    global_proxy = {
+        "proxy_type": config["proxy"]["proxy_type"],
+        "addr": config["proxy"]["addr"],
+        "port": config["proxy"]["port"],
+        "username": config["proxy"]["username"],
+        "password": config["proxy"]["password"]
+    }
 
-# 多账号配置
-accounts = [
-    {
-        "api_id": 21722171,
-        "api_hash": "6dc06adcb5961d617c347d7776d2ec76",
-        "session_name": "forward_session_1",
-        "enabled": True
-    },
-    # 添加更多账号配置
-    # {
-    #     "api_id": 2XXXX,
-    #     "api_hash": "7XXXX",
-    #     "session_name": "forward_session_2",
-    #     "enabled": True
-    # },
-    # {
-    #     "api_id": 你的第三个账号ID,
-    #     "api_hash": "你的第三个账号Hash", 
-    #     "session_name": "forward_session_3",
-    #     "enabled": True
-    # }
-]
+# 账号配置
+accounts = config["accounts"]
 
-# ============ 频道配置 ============
-# - 留空或设为 None 表示使用手动选择
-# 资源频道：# -100XXXXXXXX, 频道ID  # "@example_channel",频道用户名  # "https://t.me/example_channel",频道链接
-preset_source_channels = []
-#转发信息目标频道
-preset_target_channel = -100123456789
+# 频道配置
+preset_source_channels = config["channels"]["preset_source_channels"]
+preset_target_channel = config["channels"]["preset_target_channel"]
 
-# 自动导出配置，仅使用导出功能：python TG_ZF.py export
-auto_export_channels = False  # 设置为 True 时，程序启动时自动导出频道信息
+# 导出配置
+auto_export_channels = config["export"]["auto_export_channels"]
 
-# 自动清理配置，仅使用清理功能：python TG_ZF.py clean
-auto_clean_violations = False  # 设置为 True 时，程序启动时自动清理违规消息
-clean_scan_limit = None  # 清理扫描范围（条消息），None表示扫描所有，建议设置为5000-10000
-clean_batch_size = 100  # 每次扫描的消息数量（进度显示间隔）
-clean_delay = 1  # 删除消息的延迟（秒）
+# 清理配置
+auto_clean_violations = config["clean"]["auto_clean_violations"]
+clean_scan_limit = config["clean"]["scan_limit"]
+clean_batch_size = config["clean"]["batch_size"]
+clean_delay = config["clean"]["delay"]
 
 # 账号轮换配置
-enable_account_rotation = True  # 是否启用账号轮换
-rotation_interval = 500          # 每转发多少条消息后轮换账号
-account_delay = 5               # 账号切换延迟（秒）
-enable_smart_account_switch = True  # 是否启用智能账号切换（自动跳过无法访问频道的账号）
+enable_account_rotation = config["account_rotation"]["enable_account_rotation"]
+rotation_interval = config["account_rotation"]["rotation_interval"]
+account_delay = config["account_rotation"]["account_delay"]
+enable_smart_account_switch = config["account_rotation"]["enable_smart_account_switch"]
 
-max_messages = None       # None 表示全部消息
-delay_single = 2          # 单条消息延迟（秒）
-delay_group = 2           # 相册延迟（秒）
-forward_history_file = "forward_history.json"  # 转发历史记录文件（包含进度）
-batch_progress_interval = 100  # 批量进度显示间隔（条消息）
+# 转发配置
+max_messages = config["forward"]["max_messages"]
+delay_single = config["forward"]["delay_single"]
+delay_group = config["forward"]["delay_group"]
+forward_history_file = config["forward"]["forward_history_file"]
+batch_progress_interval = config["forward"]["batch_progress_interval"]
 
-# ============ 广告过滤配置 ============
-enable_ad_filter = True   # 是否启用广告过滤
-ad_keywords = [           # 广告关键词
-    "推广", "广告", "营销", "代理", "加盟", "招商", "投资", "理财",
-    "店铺", "注册", "官方", "佣金", "汇旺", "官网注册", "返水",
-    "入款", "出款", "返水", "彩金", "资金保障", "提款"
-]
+# 广告过滤配置
+enable_ad_filter = config["ad_filter"]["enable_ad_filter"]
+ad_keywords = config["ad_filter"]["ad_keywords"]
+ad_patterns = config["ad_filter"]["ad_patterns"]
+min_message_length = config["ad_filter"]["min_message_length"]
+max_links_per_message = config["ad_filter"]["max_links_per_message"]
 
-ad_patterns = [           # 广告正则模式
-    r'https?://[^\s]+',   # 链接
-    r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',  # 邮箱
-]
+# 内容过滤配置
+enable_content_filter = config["content_filter"]["enable_content_filter"]
+enable_media_required_filter = config["content_filter"]["enable_media_required_filter"]
+meaningless_words = config["content_filter"]["meaningless_words"]
+max_repeat_chars = config["content_filter"]["max_repeat_chars"]
+min_meaningful_length = config["content_filter"]["min_meaningful_length"]
+max_emoji_ratio = config["content_filter"]["max_emoji_ratio"]
 
-min_message_length = 10   # 最小消息长度（过短可能是广告）
-max_links_per_message = 3 # 每条消息最大链接数
+# 去重配置
+enable_content_deduplication = config["deduplication"]["enable_content_deduplication"]
+dedup_history_file = config["deduplication"]["dedup_history_file"]
+target_channel_scan_limit = config["deduplication"]["target_channel_scan_limit"]
+verbose_dedup_logging = config["deduplication"]["verbose_dedup_logging"]
 
-# ============ 内容质量过滤配置 ============
-enable_content_filter = True  # 是否启用内容质量过滤
-enable_media_required_filter = True  # 是否要求无意义消息必须有媒体内容
-
-meaningless_words = [         # 无意义词汇
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "Cy",
-    "嗯", "哦", "啊", "额", "呃", "哈", "呵", "嘿", "嗨", "cy",
-    "好的", "ok", "okay", "yes", "no", "是", "不是", "对", "不对",
-    "哈哈", "呵呵", "嘿嘿", "嘻嘻", "嘿嘿嘿", "哈哈哈", "插眼",
-    "顶", "赞", "👍", "👌", "😊", "😄", "😂", "😅",
-    "沙发", "板凳", "地板", "地下室", "前排", "后排",
-    "路过", "看看", "瞧瞧", "围观", "吃瓜", "打卡",
-    "签到", "报到", "冒泡", "潜水", "灌水", "水贴"
-]
-
-max_repeat_chars = 3         # 最大重复字符数（如"哈哈哈"超过3个字符）
-min_meaningful_length = 5    # 最小有意义内容长度
-max_emoji_ratio = 0.5        # 最大表情符号比例
-
-# ============ 内容去重配置 ============
-enable_content_deduplication = True  # 是否启用内容去重
-dedup_history_file = "dedup_history.json"  # 去重历史记录文件
-target_channel_scan_limit = None  # 目标频道扫描范围（条消息），None表示扫描所有
-verbose_dedup_logging = False  # 是否显示详细的去重日志（True=显示每个重复相册，False=只在批量统计时显示）
-# 去重策略：相册以整个相册组作为hash值判断，单条消息基于媒体文件进行判断
-# ==========================================
-
-# ============ 关联频道配置 ============
-enable_linked_channel_support = True  # 是否启用关联频道支持
-force_forward_linked_channels = True  # 是否强制转发关联频道（跳过访问权限检查）
-# 关联频道：这些频道可能是其他频道的关联频道，你的账号没有加入但内容可以转发
-# 启用后，程序会尝试直接转发这些频道的内容，即使无法获取频道实体
+# 关联频道配置
+enable_linked_channel_support = config["linked_channel"]["enable_linked_channel_support"]
+force_forward_linked_channels = config["linked_channel"]["force_forward_linked_channels"]
 # ==========================================
 
 # ============ 常量定义 ============
@@ -175,6 +192,9 @@ def handle_forward_error(e, msg_id, account_name, msg_type="消息"):
     if "protected chat" in error_msg.lower() or "can't forward messages from a protected chat" in error_msg.lower():
         print(f"🚫 无法转发{msg_type} {msg_id} ({account_name}): 受保护的聊天")
         return False, "protected_chat"
+    elif "could not find the input entity" in error_msg.lower():
+        print(f"🚫 无法转发{msg_type} {msg_id} ({account_name}): 找不到频道实体（账号可能未加入源频道）")
+        return False, "entity_not_found"
     elif "chat not found" in error_msg.lower():
         print(f"🚫 无法转发{msg_type} {msg_id} ({account_name}): 聊天不存在")
         return False, "chat_not_found"
@@ -287,8 +307,8 @@ async def process_album_group(group_buffer, src_dialog, dst_dialog):
             pass  # 相册中所有图片都是重复的
         return 0, 0, 1  # 返回跳过计数
     
-    # 只转发不重复的图片
-    success, error_type = await forward_group_safe(dst_dialog, unique_messages)
+    # 只转发不重复的图片（传递源频道ID）
+    success, error_type = await forward_group_safe(dst_dialog, unique_messages, src_channel_id=src_dialog.id)
     
     if success:
         # 记录转发历史
@@ -367,20 +387,32 @@ async def switch_to_accessible_account(src_dialog, dst_dialog):
     original_index = current_client_index
     
     # 尝试所有账号，找到可访问的账号
-    for i in range(len(clients)):
-        test_index = (current_client_index + 1) % len(clients)
+    attempts = 0
+    while attempts < len(clients):
+        attempts += 1
+        test_index = (original_index + attempts) % len(clients)
+        
+        # 跳过当前账号自己
+        if test_index == original_index:
+            continue
+        
         test_account = clients[test_index]["account"]["session_name"]
+        
+        # 🔧 修复：先检查账号是否处于FloodWait状态
+        if is_account_in_floodwait(test_account):
+            remaining = get_account_floodwait_remaining(test_account)
+            print(f"⚠️ 账号 {test_account} 处于FloodWait状态，剩余 {remaining} 秒，跳过")
+            continue
         
         # 检查这个账号是否可访问源频道
         is_accessible, reason = await check_channel_accessibility(src_dialog, dst_dialog, test_account)
         if is_accessible:
             current_client_index = test_index
             print(f"🔄 切换到可访问账号: {current_account} → {test_account}")
+            reset_account_counter()  # 🔧 修复：切换账号后重置计数器
             return True
         else:
             print(f"⚠️ 账号 {test_account} 无法访问频道: {reason}")
-            # 继续尝试下一个账号
-            current_client_index = test_index
     
     # 如果所有账号都无法访问，回到原账号
     current_client_index = original_index
@@ -1729,15 +1761,26 @@ async def choose_multiple_dialogs(title: str):
             print(f"❌ 输入无效，请重新选择。错误: {e}")
 
 # ---------- 转发函数（处理 FloodWait 和多账号） ----------
-async def forward_message_safe(dst, msg):
+async def forward_message_safe(dst, msg, src_channel_id=None):
+    global current_client_index  # 🔧 在函数开头声明全局变量
+    
     client = get_current_client()
     account_info = get_current_account_info()
+    original_client_index = current_client_index  # 🔧 记录原始账号索引
+    
+    # 🔧 获取源频道ID（从消息对象或参数）
+    if src_channel_id is None and msg:
+        src_channel_id = msg.chat_id if hasattr(msg, 'chat_id') else None
     
     while True:
         try:
             # 直接使用频道ID而不是dialog对象，避免实体不匹配问题
             dst_id = dst.id if hasattr(dst, 'id') else dst
-            await client.forward_messages(dst_id, msg)
+            # 🔧 明确指定源频道ID进行转发
+            if src_channel_id:
+                await client.forward_messages(dst_id, msg, from_peer=src_channel_id)
+            else:
+                await client.forward_messages(dst_id, msg)
             increment_account_counter()
             return True, None
         except errors.FloodWaitError as e:
@@ -1795,17 +1838,56 @@ async def forward_message_safe(dst, msg):
             print(f"🚫 无法转发消息 {msg.id} ({account_info['session_name']}): 用户被频道封禁")
             return False, "user_banned"
         except Exception as e:
+            error_msg = str(e)
+            # 🔧 修复：特殊处理"找不到实体"错误
+            if "could not find the input entity" in error_msg.lower():
+                print(f"⚠️ 账号 {account_info['session_name']} 无法访问源频道实体")
+                # 如果当前账号不是原始账号（说明是切换后的账号）
+                if current_client_index != original_client_index:
+                    print(f"🔄 切换回原账号并等待FloodWait")
+                    # 切换回原账号（global已在函数开头声明）
+                    current_client_index = original_client_index
+                    client = get_current_client()
+                    account_info = get_current_account_info()
+                    
+                    # 检查原账号的FloodWait剩余时间
+                    if is_account_in_floodwait(account_info['session_name']):
+                        wait_time = get_account_floodwait_remaining(account_info['session_name'])
+                        print(f"⏳ 等待原账号FloodWait: {wait_time} 秒")
+                        await asyncio.sleep(wait_time + 5)
+                    
+                    # 刷新目标频道dialog
+                    try:
+                        dst = await refresh_dialog_object(client, dst)
+                    except Exception as refresh_e:
+                        print(f"⚠️ 刷新目标频道dialog失败: {refresh_e}")
+                    
+                    continue  # 重试
+                else:
+                    # 原账号也无法访问，说明真的有问题
+                    return False, "entity_not_found"
             return handle_forward_error(e, msg.id, account_info['session_name'], "消息")
 
-async def forward_group_safe(dst, msgs):
+async def forward_group_safe(dst, msgs, src_channel_id=None):
+    global current_client_index  # 🔧 在函数开头声明全局变量
+    
     client = get_current_client()
     account_info = get_current_account_info()
+    original_client_index = current_client_index  # 🔧 记录原始账号索引
+    
+    # 🔧 获取源频道ID（从消息对象或参数）
+    if src_channel_id is None and msgs:
+        src_channel_id = msgs[0].chat_id if hasattr(msgs[0], 'chat_id') else None
     
     while True:
         try:
             # 直接使用频道ID而不是dialog对象，避免实体不匹配问题
             dst_id = dst.id if hasattr(dst, 'id') else dst
-            await client.forward_messages(dst_id, msgs)
+            # 🔧 明确指定源频道ID进行转发
+            if src_channel_id:
+                await client.forward_messages(dst_id, msgs, from_peer=src_channel_id)
+            else:
+                await client.forward_messages(dst_id, msgs)
             increment_account_counter()
             return True, None
         except errors.FloodWaitError as e:
@@ -1844,11 +1926,9 @@ async def forward_group_safe(dst, msgs):
                     except Exception as e:
                         print(f"⚠️ 刷新目标频道dialog失败: {e}")
                     
-                    # 刷新消息对象，确保使用新账号的正确实体
-                    try:
-                        msgs = await refresh_message_objects(client, msgs)
-                    except Exception as e:
-                        print(f"⚠️ 刷新消息对象失败: {e}")
+                    # 🔧 修复：移除消息对象刷新
+                    # 消息对象来自源频道，新账号可能没有加入源频道
+                    # 转发时只需要目标频道实体和消息ID即可，不需要刷新消息对象
                     
                     continue  # 使用新账号重试
                 else:
@@ -1870,6 +1950,34 @@ async def forward_group_safe(dst, msgs):
             return False, "user_banned"
         except Exception as e:
             msg_id = msgs[0].grouped_id if msgs else 'unknown'
+            error_msg = str(e)
+            # 🔧 修复：特殊处理"找不到实体"错误
+            if "could not find the input entity" in error_msg.lower():
+                print(f"⚠️ 账号 {account_info['session_name']} 无法访问源频道实体")
+                # 如果当前账号不是原始账号（说明是切换后的账号）
+                if current_client_index != original_client_index:
+                    print(f"🔄 切换回原账号并等待FloodWait")
+                    # 切换回原账号（global已在函数开头声明）
+                    current_client_index = original_client_index
+                    client = get_current_client()
+                    account_info = get_current_account_info()
+                    
+                    # 检查原账号的FloodWait剩余时间
+                    if is_account_in_floodwait(account_info['session_name']):
+                        wait_time = get_account_floodwait_remaining(account_info['session_name'])
+                        print(f"⏳ 等待原账号FloodWait: {wait_time} 秒")
+                        await asyncio.sleep(wait_time + 5)
+                    
+                    # 刷新目标频道dialog
+                    try:
+                        dst = await refresh_dialog_object(client, dst)
+                    except Exception as refresh_e:
+                        print(f"⚠️ 刷新目标频道dialog失败: {refresh_e}")
+                    
+                    continue  # 重试
+                else:
+                    # 原账号也无法访问，说明真的有问题
+                    return False, "entity_not_found"
             return handle_forward_error(e, msg_id, account_info['session_name'], "相册")
 
 async def check_channel_accessibility(src_dialog, dst_dialog, account_name=None):
@@ -1934,7 +2042,8 @@ async def check_channel_accessibility(src_dialog, dst_dialog, account_name=None)
         
         # 尝试转发一条测试消息来检测受保护聊天
         try:
-            await client.forward_messages(dst_dialog, test_msg)
+            # 🔧 明确指定源频道ID进行转发
+            await client.forward_messages(dst_dialog, test_msg, from_peer=src_dialog.id)
             # 如果转发成功，立即删除转发的消息（避免污染目标频道）
             try:
                 async for forwarded_msg in client.iter_messages(dst_dialog, limit=1):
@@ -1947,10 +2056,12 @@ async def check_channel_accessibility(src_dialog, dst_dialog, account_name=None)
             set_channel_access_for_account(account_name, src_dialog.id, True, "可访问")
             return result
         except errors.FloodWaitError as e:
-            # FloodWait 不是访问问题，等待后重试
-            await asyncio.sleep(e.seconds + 5)
-            result = True, "可访问（FloodWait）"
-            set_channel_access_for_account(account_name, src_dialog.id, True, "可访问（FloodWait）")
+            # 🔧 修复：记录FloodWait状态
+            print(f"⚠️ 账号 {account_name} 在访问性检查时触发FloodWait: {e.seconds} 秒")
+            set_account_floodwait_status(account_name, e.seconds)
+            # FloodWait 不是访问问题，但不等待直接返回
+            result = True, "可访问（但处于FloodWait）"
+            set_channel_access_for_account(account_name, src_dialog.id, True, "可访问（但处于FloodWait）")
             return result
         except Exception as e:
             error_msg = str(e)
@@ -2255,13 +2366,15 @@ async def forward_from_single_source(src_dialog, dst_dialog):
                             if should_rotate_account():
                                 if await switch_to_accessible_account(src_dialog, dst_dialog):
                                     await asyncio.sleep(account_delay)
-                                reset_account_counter()
+                                else:
+                                    # 如果切换失败，也重置计数器避免频繁尝试切换
+                                    reset_account_counter()
                             
                             await asyncio.sleep(delay_group)
                         elif errors > 0:
-                            # 检查是否是受保护聊天错误，如果是则立即跳过频道
-                            print(f"🚫 检测到受保护的聊天，跳过频道 {get_channel_name(src_dialog)}")
-                            return create_skipped_result(src_dialog, PROTECTED_CHAT_REASON, total_messages, forwarded_count, ad_filtered_count, content_filtered_count, duplicate_filtered_count, error_count)
+                            # 🔧 修复：只有真正的受保护聊天错误才跳过频道
+                            # entity_not_found 错误不应跳过频道，只是当前账号无法访问
+                            save_progress(src_dialog.id, dst_dialog.id, group_buffer[-1].id)
                         else:
                             save_progress(src_dialog.id, dst_dialog.id, group_buffer[-1].id)
                     group_buffer = [msg]
@@ -2281,18 +2394,20 @@ async def forward_from_single_source(src_dialog, dst_dialog):
                         if should_rotate_account():
                             if await switch_to_accessible_account(src_dialog, dst_dialog):
                                 await asyncio.sleep(account_delay)
-                            reset_account_counter()
+                            else:
+                                # 如果切换失败，也重置计数器避免频繁尝试切换
+                                reset_account_counter()
                         
                         await asyncio.sleep(delay_group)
                     elif errors > 0:
-                        # 检查是否是受保护聊天错误，如果是则立即跳过频道
-                        print(f"🚫 检测到受保护的聊天，跳过频道 {get_channel_name(src_dialog)}")
-                        return create_skipped_result(src_dialog, PROTECTED_CHAT_REASON, total_messages, forwarded_count, ad_filtered_count, content_filtered_count, duplicate_filtered_count, error_count)
+                        # 🔧 修复：只有真正的受保护聊天错误才跳过频道
+                        # entity_not_found 错误不应跳过频道，只是当前账号无法访问
+                        save_progress(src_dialog.id, dst_dialog.id, group_buffer[-1].id)
                     else:
                         save_progress(src_dialog.id, dst_dialog.id, group_buffer[-1].id)
                     group_buffer = []
 
-                success, error_type = await forward_message_safe(dst_dialog, msg)
+                success, error_type = await forward_message_safe(dst_dialog, msg, src_channel_id=src_dialog.id)
                 if success:
                     # 只在批量统计时显示成功信息，减少冗余日志
                     if total_messages % batch_size == 0:
@@ -2306,7 +2421,9 @@ async def forward_from_single_source(src_dialog, dst_dialog):
                     if should_rotate_account():
                         if await switch_to_accessible_account(src_dialog, dst_dialog):
                             await asyncio.sleep(account_delay)
-                        reset_account_counter()
+                        else:
+                            # 如果切换失败，也重置计数器避免频繁尝试切换
+                            reset_account_counter()
                     
                     await asyncio.sleep(delay_single)
                 else:
@@ -2326,11 +2443,8 @@ async def forward_from_single_source(src_dialog, dst_dialog):
             
             if forwarded > 0:
                 save_progress(src_dialog.id, dst_dialog.id, group_buffer[-1].id)
-            elif errors > 0:
-                # 检查是否是受保护聊天错误，如果是则立即跳过频道
-                print(f"🚫 检测到受保护的聊天，跳过频道 {get_channel_name(src_dialog)}")
-                return create_skipped_result(src_dialog, "受保护的聊天", total_messages, forwarded_count, ad_filtered_count, content_filtered_count, duplicate_filtered_count, error_count)
             else:
+                # 🔧 修复：不管成功或失败，都保存进度
                 save_progress(src_dialog.id, dst_dialog.id, group_buffer[-1].id)
 
     except Exception as e:

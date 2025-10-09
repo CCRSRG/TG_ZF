@@ -1,165 +1,189 @@
 # Telegram 频道信息转发工具 (TG_ZF)
 
+一个功能强大的 Telegram 频道内容转发工具，支持多账号轮换、智能过滤、内容去重等高级功能。
+
 ## ✨ 主要功能
 
 ### 🔄 消息转发
-- **多账号支持**：支持配置多个 Telegram 账号，自动轮换使用
+- **多账号支持**：配置多个 Telegram 账号，自动轮换使用
 - **智能账号切换**：自动跳过无法访问频道的账号
-- **断点续传**：支持中断后继续转发，不会重复处理
-- **批量处理**：支持同时处理多个源频道
+- **断点续传**：中断后继续转发，不会重复处理
+- **批量处理**：同时处理多个源频道
 
 ### 🛡️ 智能过滤
-- **广告过滤**：基于关键词和正则模式识别并过滤广告内容
+- **广告过滤**：基于关键词和正则模式识别并过滤广告
 - **内容质量过滤**：过滤无意义、重复字符、表情符号过多的消息
-- **媒体要求过滤**：可设置无意义消息必须有媒体内容才保留
+- **媒体要求过滤**：可设置无意义消息必须有媒体内容
 - **服务消息过滤**：自动跳过系统服务消息
 
 ### 🔍 内容去重
-- **媒体去重**：基于媒体文件特征进行去重，避免重复转发相同内容
-- **相册去重**：智能处理相册组，以整个相册为单位进行去重
+- **媒体去重**：基于媒体文件特征去重，避免重复转发
+- **相册去重**：智能处理相册组，以整个相册为单位去重
 - **目标频道扫描**：预先扫描目标频道，避免转发已存在的内容
-- **增量扫描**：支持增量扫描，只处理新增内容
+- **增量扫描**：只处理新增内容
 
 ### 📊 统计与监控
 - **实时进度**：显示转发进度和统计信息
 - **详细日志**：记录转发、过滤、去重的详细信息
 - **历史记录**：保存转发历史，支持查看和恢复
-- **账号统计**：显示各账号的使用情况
+
+---
 
 ## 🚀 快速开始
 
-### 环境要求
+### 1. 环境要求
 - Python 3.7+
-- Telegram API 凭据
+- Telegram API 凭据（[如何获取](#获取-api-凭据)）
 
-### 安装依赖
+### 2. 安装依赖
 ```bash
-pip install telethon
-pip install PySocks
+pip install telethon pyyaml PySocks
 ```
 
-### 获取 API 凭据
+### 3. 获取 API 凭据
 1. 访问 [my.telegram.org](https://my.telegram.org)
 2. 登录您的 Telegram 账号
-3. 创建新应用获取 `api_id` 和 `api_hash`
+3. 点击 "API development tools"
+4. 创建新应用获取 `api_id` 和 `api_hash`
 
-### 配置代理
-编辑 `TG_ZF.py` 文件中的代理配置：
+### 4. 配置文件
 
-```python
-global_proxy = None  # 设置为 None 表示不使用代理
-# 代理配置示例（取消注释并修改为您的代理信息）：
-global_proxy = {
-    "proxy_type": "socks5",  # 代理类型：socks5, socks4, http, mtproto
-    "addr": "127.0.0.1",     # 代理服务器地址
-    "port": 7890,            # 代理软件上设置的端口
-    "username": "",          # 代理用户名（可选，留空表示无需认证）
-    "password": ""           # 代理密码（可选，留空表示无需认证）
-}
+编辑 `config.yaml` 文件：
+
+```yaml
+# ============ 代理配置 ============
+proxy:
+  enabled: true                    # 是否启用代理
+  proxy_type: http                 # 代理类型: http, socks5, socks4
+  addr: 127.0.0.1
+  port: 7890
+
+# ============ 账号配置 ============
+accounts:
+  - api_id: 你的API_ID            # 替换为你的 API ID
+    api_hash: "你的API_Hash"       # 替换为你的 API Hash   可使用默认配置
+    session_name: forward_session_1
+    enabled: true
+
+# ============ 频道配置 ============
+channels:
+  # 源频道列表（留空表示手动选择）
+  preset_source_channels: [
+    -1001234567890,                # 频道 ID
+    "@example_channel",            # 频道用户名
+    "https://t.me/channel"         # 频道链接
+  ]
+  # 目标频道（null 表示手动选择）
+  preset_target_channel: -1001234567890
 ```
 
-### 配置账号
-编辑 `TG_ZF.py` 文件中的账号配置：
+> **📝 注意**：YAML 格式支持注释，可以用 `#` 添加说明。详细配置说明见文末。
 
-```python
-accounts = [
-    {
-        "api_id": 你的API_ID,
-        "api_hash": "你的API_HASH",
-        "session_name": "forward_session_1",
-        "enabled": True
-    },
-    # 可以添加更多账号
-]
-```
+### 5. 运行程序
 
-### 运行程序
 ```bash
 # 正常转发模式
 python TG_ZF.py
-# 初次运行需要根据提示输入账号，+86后接空格
-Please enter your phone (or bot token): +86 186xxxxxxxxxx
-Please enter the code you received: 收到的验证码
-# 初次运行会扫描目标频道的资源生成hash值用于去重，需要等待扫描完成
-# 转发信息100条提示一次
-📊 预计剩余待转发: 7367 条消息
-📊 历史转发统计: 总计 487 条 (单条: 487, 相册: 0)
-📈 进度: 100 条 | ✅ 转发:89 🚫 广告:2 🗑️ 内容:0 🔄 重复:1 📚 跳过相册:2 ❌ 错误:0
-# 速度可以修改下面两个参数调整
-delay_single = 2          # 单条消息延迟（秒）
-delay_group = 4           # 相册延迟（秒）
-# 仅导出账号频道信息
+
+# 首次运行需要验证
+# Please enter your phone (or bot token): +86 186xxxxxxxx
+# Please enter the code you received: 12345
+
+# 仅导出频道信息
 python TG_ZF.py export
-# 违规信息清理
+
+# 清理违规消息
 python TG_ZF.py clean
 ```
 
+### 6. 运行效果
+
+```
+🔍 扫描目标频道...
+📊 预计剩余待转发: 7367 条消息
+📊 历史转发统计: 总计 487 条 (单条: 487, 相册: 0)
+📈 进度: 100 条 | ✅ 转发:89 🚫 广告:2 🗑️ 内容:0 🔄 重复:1 📚 相册:8 ❌ 错误:0
+```
+
+---
+
 ## ⚙️ 配置说明
 
-### 账号配置
-```python
-# 账号轮换配置
-enable_account_rotation = False  # 是否启用账号轮换
-rotation_interval = 500          # 每转发多少条消息后轮换账号
-account_delay = 5               # 账号切换延迟（秒）
-enable_smart_account_switch = True  # 智能账号切换
+### 账号轮换配置
+```yaml
+account_rotation:
+  enable_account_rotation: true    # 是否启用账号轮换
+  rotation_interval: 500           # 每转发多少条消息后轮换账号
+  account_delay: 5                 # 账号切换延迟（秒）
+  enable_smart_account_switch: true # 智能账号切换
 ```
 
-### 频道配置
-```python
-# 信息转发：源频道----→目标频道
-# 预设源频道（支持多种格式）- 留空表示使用手动选择
-preset_source_channels = [
-    -100xxxxxxxx,                      # 频道ID
-    "@example_channel",                # 频道用户名
-    "https://t.me/example_channel"     # 频道链接
-]
-
-# 预设目标频道，设为 None 表示使用手动选择
-preset_target_channel = -100xxxxxxxx
+### 转发速度配置
+```yaml
+forward:
+  delay_single: 2                  # 单条消息延迟（秒）
+  delay_group: 2                   # 相册延迟（秒）
+  max_messages: null               # 最大转发数量（null=全部）
 ```
 
-### 过滤配置
-```python
-# 广告过滤
-enable_ad_filter = True
-ad_keywords = ["推广", "广告", "营销", "代理", "加盟", "招商"]
-ad_patterns = [
-    r'https?://[^\s]+',   # 链接
-    r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',  # 邮箱
-]
-
-# 内容质量过滤
-enable_content_filter = True
-meaningless_words = ["嗯", "哦", "啊", "哈哈", "呵呵"]
-max_repeat_chars = 3         # 最大重复字符数
-min_meaningful_length = 5    # 最小有意义内容长度
-max_emoji_ratio = 0.5        # 最大表情符号比例
+### 广告过滤配置
+```yaml
+ad_filter:
+  enable_ad_filter: true
+  ad_keywords: [推广, 广告, 营销, 代理, 加盟, 招商, 投资]
+  ad_patterns:
+    - 'https?://[^\s]+'            # 过滤链接
+    - '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'  # 过滤邮箱
+  min_message_length: 10           # 最小消息长度
+  max_links_per_message: 3         # 每条消息最大链接数
 ```
 
-### 去重配置
-```python
-# 内容去重
-enable_content_deduplication = True
-dedup_history_file = "dedup_history.json"
-target_channel_scan_limit = None  # 扫描范围，None表示全部
-verbose_dedup_logging = False     # 详细去重日志
+### 内容质量过滤
+```yaml
+content_filter:
+  enable_content_filter: true
+  enable_media_required_filter: true  # 无意义消息必须有媒体
+  meaningless_words: [嗯, 哦, 啊, 哈哈, 顶, 赞, 👍, 沙发, 路过]
+  max_repeat_chars: 3              # 最大重复字符数（如"哈哈哈"）
+  min_meaningful_length: 5         # 最小有意义内容长度
+  max_emoji_ratio: 0.5             # 最大表情符号比例
 ```
+
+### 内容去重配置
+```yaml
+deduplication:
+  enable_content_deduplication: true
+  dedup_history_file: dedup_history.json
+  target_channel_scan_limit: null  # 扫描范围（null=全部）
+  verbose_dedup_logging: false     # 是否显示详细去重日志
+```
+
+### 关联频道支持
+```yaml
+linked_channel:
+  enable_linked_channel_support: true     # 启用关联频道支持
+  force_forward_linked_channels: true     # 强制转发关联频道内容
+```
+
+---
 
 ## 📁 文件说明
 
 ### 核心文件
-- `TG_ZF.py` - 主程序文件
+- `TG_ZF.py` - 主程序
+- `config.yaml` - 配置文件（支持注释）
 - `README.md` - 说明文档
 
-### 数据文件
+### 数据文件（自动生成）
 - `forward_history.json` - 转发历史记录（包含进度）
 - `dedup_history.json` - 去重历史记录
 - `channels_export.json` - 频道信息导出文件
 
-### 会话文件
+### 会话文件（自动生成）
 - `forward_session_*.session` - Telegram 会话文件
-- `forward_session_*.session-journal` - 会话日志文件
+- `forward_session_*.session-journal` - 会话日志
+
+---
 
 ## 🎯 使用场景
 
@@ -167,31 +191,36 @@ verbose_dedup_logging = False     # 详细去重日志
 将多个源频道的内容聚合到一个目标频道，实现内容统一管理。
 
 ### 2. 内容筛选转发
-通过智能过滤功能，只转发高质量、有意义的内容，过滤广告和垃圾信息。
+通过智能过滤，只转发高质量、有意义的内容，过滤广告和垃圾信息。
 
 ### 3. 多账号管理
 使用多个账号进行转发，避免单账号限制，提高转发效率。
 
 ### 4. 内容去重
-避免重复转发相同内容，保持目标频道的整洁。
+避免重复转发相同内容，保持目标频道整洁。
+
+---
 
 ## 🔧 高级功能
 
 ### 断点续传
-程序支持中断后继续转发，所有进度都会保存到 `forward_history.json` 文件中。
+程序支持中断后继续转发，所有进度保存在 `forward_history.json` 中。
 
 ### 智能账号切换
-当检测到账号无法访问某个频道时，会自动切换到其他可用账号。
+检测到账号无法访问频道时，自动切换到其他可用账号。
 
 ### 目标频道预扫描
-在开始转发前，程序会扫描目标频道，建立去重数据库，避免转发重复内容。
+在开始转发前扫描目标频道，建立去重数据库，避免重复内容。
 
 ### 批量进度显示
-每处理一定数量的消息后显示批量统计，包括转发、过滤、去重的数量。
+每处理一定数量消息后显示统计信息：
+```
+📈 进度: 100 条 | ✅ 转发:89 🚫 广告:2 🗑️ 内容:0 🔄 重复:1
+```
 
-## 📊 统计信息
+---
 
-程序运行时会显示详细的统计信息：
+## 📊 统计信息示例
 
 ```
 📊 总体转发统计:
@@ -204,32 +233,92 @@ verbose_dedup_logging = False     # 详细去重日志
 成功率: 80.0%
 ```
 
+---
+
 ## ⚠️ 注意事项
 
-1. **API 限制**：请遵守 Telegram API 的使用限制，避免频繁请求
+1. **API 限制**：遵守 Telegram API 使用限制，避免频繁请求
 2. **账号安全**：妥善保管 API 凭据和会话文件
-3. **内容合规**：确保转发的内容符合相关法律法规
+3. **内容合规**：确保转发内容符合相关法律法规
 4. **网络稳定**：建议在稳定的网络环境下运行
 5. **权限管理**：确保账号有访问源频道和写入目标频道的权限
 
+---
+
 ## 🐛 常见问题
 
+### Q: 程序提示"配置文件不存在"
+**A**: 需要先创建配置文件：
+```bash
+# 如果有 config.yaml，直接使用
+# 如果没有，创建一个新的配置文件并填入你的账号信息
+```
+
 ### Q: 程序提示"没有可用的账号"
-A: 检查账号配置是否正确，确保 `api_id` 和 `api_hash` 有效。
+**A**: 检查 `config.yaml` 中的账号配置：
+- 确保 `api_id` 和 `api_hash` 正确
+- 确保 `enabled: true`
+- 首次运行需要验证手机号
 
 ### Q: 无法访问某个频道
-A: 检查账号是否有该频道的访问权限，或尝试使用其他账号。
+**A**: 
+- 检查账号是否已加入该频道
+- 启用智能账号切换，自动使用其他账号
+- 检查频道 ID 是否正确
 
-### Q: 转发速度很慢
-A: 可以调整 `delay_single` 和 `delay_group` 参数，但要注意不要设置过小。
+### Q: 转发速度太慢
+**A**: 修改配置文件中的延迟参数：
+```yaml
+forward:
+  delay_single: 1  # 降低延迟（不建议低于 1 秒）
+  delay_group: 1
+```
 
 ### Q: 重复转发相同内容
-A: 确保启用了内容去重功能，并预先扫描目标频道。
+**A**: 
+- 确保启用了内容去重：`enable_content_deduplication: true`
+- 首次运行会扫描目标频道建立去重数据库
+- 删除 `dedup_history.json` 可重新扫描
 
-## 📄 许可证
-
-本项目仅供学习和研究使用，请遵守相关法律法规。
+### Q: 如何添加更多过滤关键词
+**A**: 编辑 `config.yaml`：
+```yaml
+ad_filter:
+  ad_keywords: [推广, 广告, 你的关键词1, 你的关键词2]
+```
 
 ---
 
-**免责声明**：本工具仅供学习和研究使用，使用者需要遵守相关法律法规和 Telegram 的使用条款。作者不承担因使用本工具而产生的任何法律责任。
+## 💡 配置文件格式
+
+本工具支持 **YAML** 和 **JSON** 两种配置格式：
+
+### YAML 格式（推荐）✅
+- ✅ 支持注释（用 `#`）
+- ✅ 格式更清晰易读
+- ✅ 容错性好
+- ✅ 列表可以横排或竖排
+
+### JSON 格式（兼容）
+- ❌ 不支持注释
+- ⚠️ 格式严格（需要注意逗号、引号）
+
+**文件优先级**：`config.yaml` > `config.yml` > `config.json`
+
+---
+
+## 📄 许可证
+
+本项目仅供学习和研究使用。
+
+**免责声明**：使用本工具需遵守相关法律法规和 Telegram 使用条款。作者不承担因使用本工具产生的任何法律责任。
+
+---
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+---
+
+**⭐ 如果这个项目对您有帮助，请给一个 Star！**
