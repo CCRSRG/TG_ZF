@@ -35,6 +35,7 @@
 ### 安装依赖
 ```bash
 pip install telethon
+pip install PySocks
 ```
 
 ### 获取 API 凭据

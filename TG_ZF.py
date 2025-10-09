@@ -7,16 +7,17 @@ from telethon import TelegramClient, errors
 
 # ============ 配置 ============
 # 全局代理配置（可选）
-global_proxy = None  # 设置为 None 表示不使用代理
+# global_proxy = None  # 设置为 None 表示不使用代理
 
 # 代理配置示例（取消注释并修改为您的代理信息）：
-# global_proxy = {
-#     "proxy_type": "socks5",  # 代理类型：socks5, socks4, http, mtproto
-#     "addr": "127.0.0.1",     # 代理服务器地址
-#     "port": 1080,            # 代理端口
-#     "username": "",          # 代理用户名（可选，留空表示无需认证）
-#     "password": ""           # 代理密码（可选，留空表示无需认证）
-# }
+global_proxy = {
+    "proxy_type": "http",  # 代理类型：socks5, socks4, http, mtproto
+    "addr": "127.0.0.1",     # 代理服务器地址
+    "port": 7890,            # 代理端口
+    "username": "",          # 代理用户名（可选，留空表示无需认证）
+    "password": ""           # 代理密码（可选，留空表示无需认证）
+}
+
 
 # 多账号配置
 accounts = [
