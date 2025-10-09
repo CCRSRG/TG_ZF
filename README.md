@@ -90,6 +90,8 @@ delay_single = 2          # 单条消息延迟（秒）
 delay_group = 4           # 相册延迟（秒）
 # 仅导出账号频道信息
 python TG_ZF.py export
+# 违规信息清理
+python TG_ZF.py clean
 ```
 
 ## ⚙️ 配置说明

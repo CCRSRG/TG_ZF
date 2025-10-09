@@ -52,6 +52,12 @@ preset_target_channel = -100123456789
 # 自动导出配置，仅使用导出功能：python TG_ZF.py export
 auto_export_channels = False  # 设置为 True 时，程序启动时自动导出频道信息
 
+# 自动清理配置，仅使用清理功能：python TG_ZF.py clean
+auto_clean_violations = False  # 设置为 True 时，程序启动时自动清理违规消息
+clean_scan_limit = None  # 清理扫描范围（条消息），None表示扫描所有，建议设置为5000-10000
+clean_batch_size = 100  # 每次扫描的消息数量（进度显示间隔）
+clean_delay = 1  # 删除消息的延迟（秒）
+
 # 账号轮换配置
 enable_account_rotation = True  # 是否启用账号轮换
 rotation_interval = 500          # 每转发多少条消息后轮换账号
@@ -2431,11 +2437,12 @@ async def main():
         last_message_id, previous_scanned = get_scan_progress(dst_dialog.id)
         choice = "1"  # 默认选择增量扫描
         force_rescan = False
+        scan_limit_to_use = target_channel_scan_limit
         
         if last_message_id:
             print(f"📊 检测到之前的扫描进度：已扫描 {previous_scanned} 条消息，最后消息ID: {last_message_id}")
             print(f"💡 选择扫描模式：")
-            print(f"  1. 增量扫描 - 只扫描新消息")
+            print(f"  1. 增量扫描 - 只扫描新消息 (推荐)")
             print(f"  2. 重新扫描 - 重新扫描所有消息")
             print(f"  3. 跳过扫描 - 使用现有去重历史")
             
@@ -2456,11 +2463,55 @@ async def main():
                 except KeyboardInterrupt:
                     print("\n❌ 用户取消操作")
                     return
+        else:
+            # 首次扫描，询问扫描范围
+            print(f"\n💡 首次扫描，请选择扫描范围：")
+            print(f"  1. 最近 5000 条消息 (推荐，约5-10分钟)")
+            print(f"  2. 最近 10000 条消息 (约10-20分钟)")
+            print(f"  3. 最近 20000 条消息 (约20-40分钟)")
+            print(f"  4. 所有消息 (完整扫描，耗时可能很长)")
+            print(f"  5. 自定义数量")
+            print(f"  6. 跳过扫描")
+            
+            while True:
+                try:
+                    range_choice = input("\n请选择扫描范围 (1/2/3/4/5/6): ").strip()
+                    if range_choice == "1":
+                        scan_limit_to_use = 5000
+                        break
+                    elif range_choice == "2":
+                        scan_limit_to_use = 10000
+                        break
+                    elif range_choice == "3":
+                        scan_limit_to_use = 20000
+                        break
+                    elif range_choice == "4":
+                        scan_limit_to_use = None
+                        break
+                    elif range_choice == "5":
+                        try:
+                            custom_limit = int(input("请输入要扫描的消息数量: ").strip())
+                            if custom_limit > 0:
+                                scan_limit_to_use = custom_limit
+                                break
+                            else:
+                                print("❌ 请输入大于0的数字")
+                        except ValueError:
+                            print("❌ 输入无效，请输入数字")
+                    elif range_choice == "6":
+                        choice = "3"
+                        print("⏭️ 跳过扫描")
+                        break
+                    else:
+                        print("❌ 输入无效，请输入 1、2、3、4、5 或 6")
+                except KeyboardInterrupt:
+                    print("\n❌ 用户取消操作")
+                    return
         
         if choice != "3":  # 如果不是跳过扫描
             # 设置目标频道信息
             set_target_channel_info(get_channel_name(dst_dialog), dst_dialog.id)
-            scan_count = await scan_target_channel(dst_dialog, scan_limit=target_channel_scan_limit, force_rescan=force_rescan)
+            scan_count = await scan_target_channel(dst_dialog, scan_limit=scan_limit_to_use, force_rescan=force_rescan)
             if scan_count > 0:
                 print(f"🎯 目标频道扫描完成，已预加载 {scan_count} 条消息到去重历史")
         print()
@@ -2561,6 +2612,228 @@ async def main():
     print("🎉 所有频道处理完成")
     print(f"{'='*60}")
 
+# ---------- 违规消息检测和清理函数 ----------
+def is_violation_message(message):
+    """检测消息是否为 Telegram 违规警告消息"""
+    if not message or not message.message:
+        return False
+    
+    # Telegram 违规消息的常见文本
+    violation_keywords = [
+        "couldn't be displayed on your device because it violates",
+        "couldn't be displayed",
+        "violates the telegram terms of service",
+        "telegram terms of service"
+    ]
+    
+    message_text = message.message.lower()
+    
+    for keyword in violation_keywords:
+        if keyword in message_text:
+            return True
+    
+    return False
+
+async def scan_and_clean_violations(client, target_channel, account_name, dry_run=False, scan_limit=None):
+    """扫描并清理目标频道中的违规消息"""
+    try:
+        # 获取频道实体
+        try:
+            channel_entity = await client.get_entity(target_channel)
+            channel_name = get_channel_name(channel_entity)
+        except Exception as e:
+            print(f"❌ 无法获取频道 {target_channel}: {e}")
+            return 0
+        
+        print(f"\n🔍 正在扫描频道: {channel_name}")
+        print(f"📱 使用账号: {account_name}")
+        
+        if dry_run:
+            print(f"🔔 模式: 仅检测（不删除）")
+        else:
+            print(f"⚠️  模式: 检测并删除")
+        
+        # 显示扫描范围
+        if scan_limit:
+            print(f"📊 扫描范围: 最近 {scan_limit} 条消息")
+        else:
+            print(f"📊 扫描范围: 所有消息")
+        
+        violation_count = 0
+        scanned_count = 0
+        deleted_count = 0
+        violation_messages = []
+        
+        print(f"\n开始扫描...")
+        
+        # 扫描频道消息
+        async for msg in client.iter_messages(channel_entity, limit=scan_limit):
+            scanned_count += 1
+            
+            # 每扫描一定数量显示进度
+            if scanned_count % clean_batch_size == 0:
+                print(f"  📈 已扫描: {scanned_count} 条 | 发现违规: {violation_count} 条")
+            
+            # 检测是否为违规消息
+            if is_violation_message(msg):
+                violation_count += 1
+                violation_messages.append(msg.id)
+                
+                print(f"  🚫 发现违规消息 ID: {msg.id}")
+                
+                # 如果不是演练模式，则删除消息
+                if not dry_run:
+                    try:
+                        await client.delete_messages(channel_entity, msg.id)
+                        deleted_count += 1
+                        print(f"     ✅ 已删除")
+                        await asyncio.sleep(clean_delay)
+                    except Exception as e:
+                        print(f"     ❌ 删除失败: {e}")
+        
+        # 显示统计结果
+        print(f"\n{'='*60}")
+        print(f"📊 扫描完成统计:")
+        print(f"{'='*60}")
+        print(f"  总扫描消息: {scanned_count} 条")
+        print(f"  发现违规消息: {violation_count} 条")
+        
+        if not dry_run:
+            print(f"  成功删除: {deleted_count} 条")
+            if violation_count > deleted_count:
+                print(f"  删除失败: {violation_count - deleted_count} 条")
+        else:
+            print(f"  💡 提示: 这是演练模式，未实际删除消息")
+            print(f"  💡 运行 'python TG_ZF.py clean' 并选择 '2' 来实际删除")
+        
+        return deleted_count if not dry_run else violation_count
+        
+    except Exception as e:
+        print(f"❌ 扫描频道时发生错误: {e}")
+        return 0
+
+async def clean_all_accounts_violations():
+    """清理所有账号可访问的目标频道中的违规消息"""
+    if not clients:
+        print("❌ 没有可用的账号！")
+        return
+    
+    print("🚀 违规消息清理工具")
+    print("="*60)
+    
+    # 启动所有客户端
+    print(f"\n启动 {len(clients)} 个账号...")
+    for client_data in clients:
+        try:
+            await client_data["client"].start()
+            print(f"✅ {client_data['account']['session_name']} 启动成功")
+        except Exception as e:
+            print(f"❌ {client_data['account']['session_name']} 启动失败: {e}")
+            client_data["enabled"] = False
+    
+    # 过滤掉启动失败的账号
+    active_clients = [c for c in clients if c["enabled"]]
+    
+    if not active_clients:
+        print("❌ 没有可用的账号！")
+        return
+    
+    # 使用第一个账号
+    client_data = active_clients[0]
+    client = client_data["client"]
+    account_name = client_data["account"]["session_name"]
+    
+    # 获取目标频道
+    target_channel = None
+    
+    if preset_target_channel:
+        try:
+            entity = await get_channel_by_identifier(client, preset_target_channel)
+            if entity:
+                target_channel = entity
+                print(f"\n✅ 使用预设目标频道: {get_channel_name(entity)} ({normalize_channel_id(entity.id)})")
+            else:
+                print(f"⚠️ 无法获取预设目标频道，请手动选择")
+        except Exception as e:
+            print(f"⚠️ 获取预设目标频道失败: {e}")
+    
+    # 如果没有预设目标频道，手动选择
+    if not target_channel:
+        target_channel = await choose_dialog("要清理的目标频道/群组")
+        print(f"\n目标: {get_channel_name(target_channel)} ({normalize_channel_id(target_channel.id)})")
+    
+    # 询问用户选择扫描范围
+    print(f"\n💡 选择扫描范围：")
+    print(f"  1. 最近 1000 条消息 (快速检测，约1-2分钟)")
+    print(f"  2. 最近 5000 条消息 (常规检测，约5-10分钟)")
+    print(f"  3. 最近 10000 条消息 (深度检测，约10-20分钟)")
+    print(f"  4. 所有消息 (完整扫描，耗时较长)")
+    print(f"  5. 自定义数量")
+    
+    scan_limit = clean_scan_limit  # 使用配置的默认值
+    
+    while True:
+        try:
+            range_choice = input("\n请选择扫描范围 (1/2/3/4/5): ").strip()
+            if range_choice == "1":
+                scan_limit = 1000
+                break
+            elif range_choice == "2":
+                scan_limit = 5000
+                break
+            elif range_choice == "3":
+                scan_limit = 10000
+                break
+            elif range_choice == "4":
+                scan_limit = None
+                break
+            elif range_choice == "5":
+                try:
+                    custom_limit = int(input("请输入要扫描的消息数量: ").strip())
+                    if custom_limit > 0:
+                        scan_limit = custom_limit
+                        break
+                    else:
+                        print("❌ 请输入大于0的数字")
+                except ValueError:
+                    print("❌ 输入无效，请输入数字")
+            else:
+                print("❌ 输入无效，请输入 1、2、3、4 或 5")
+        except KeyboardInterrupt:
+            print("\n❌ 用户取消操作")
+            return
+    
+    # 询问用户是否确认清理
+    print(f"\n⚠️  警告: 此操作将删除频道中的违规消息！")
+    print(f"💡 选择操作模式：")
+    print(f"  1. 仅检测 - 只扫描并显示违规消息，不删除")
+    print(f"  2. 检测并删除 - 扫描并删除所有违规消息")
+    print(f"  3. 取消操作")
+    
+    while True:
+        try:
+            choice = input("\n请选择操作模式 (1/2/3): ").strip()
+            if choice == "1":
+                # 演练模式
+                await scan_and_clean_violations(client, target_channel, account_name, dry_run=True, scan_limit=scan_limit)
+                break
+            elif choice == "2":
+                # 实际删除模式
+                confirm = input(f"\n❓ 确认要删除 {get_channel_name(target_channel)} 中的违规消息吗？(yes/no): ").strip().lower()
+                if confirm in ['yes', 'y']:
+                    await scan_and_clean_violations(client, target_channel, account_name, dry_run=False, scan_limit=scan_limit)
+                else:
+                    print("❌ 操作已取消")
+                break
+            elif choice == "3":
+                print("❌ 操作已取消")
+                break
+            else:
+                print("❌ 输入无效，请输入 1、2 或 3")
+        except KeyboardInterrupt:
+            print("\n❌ 用户取消操作")
+            break
+
 # ---------- 独立导出脚本 ----------
 async def export_only():
     """仅执行导出功能的独立脚本"""
@@ -2573,6 +2846,15 @@ async def export_only():
     
     await export_all_accounts_channels()
 
+# ---------- 独立清理脚本 ----------
+async def clean_only():
+    """仅执行清理功能的独立脚本"""
+    if not clients:
+        print("❌ 没有可用的账号！请检查账号配置。")
+        return
+    
+    await clean_all_accounts_violations()
+
 # ---------- 运行 ----------
 if __name__ == "__main__":
     if not clients:
@@ -2581,13 +2863,36 @@ if __name__ == "__main__":
     
     # 检查命令行参数
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "export":
-        # 独立导出模式
+    if len(sys.argv) > 1:
+        command = sys.argv[1].lower()
         main_client = clients[0]["client"]
-        with main_client:
-            main_client.loop.run_until_complete(export_only())
+        
+        if command == "export":
+            # 独立导出模式
+            print("="*60)
+            print("📤 频道信息导出模式")
+            print("="*60)
+            with main_client:
+                main_client.loop.run_until_complete(export_only())
+        elif command == "clean":
+            # 独立清理模式
+            print("="*60)
+            print("🧹 违规消息清理模式")
+            print("="*60)
+            with main_client:
+                main_client.loop.run_until_complete(clean_only())
+        else:
+            print(f"❌ 未知命令: {command}")
+            print(f"💡 可用命令:")
+            print(f"   - python TG_ZF.py         # 正常转发模式")
+            print(f"   - python TG_ZF.py export  # 导出频道信息")
+            print(f"   - python TG_ZF.py clean   # 清理违规消息")
+            exit(1)
     else:
         # 正常模式
+        print("="*60)
+        print("🔄 消息转发模式")
+        print("="*60)
         main_client = clients[0]["client"]
         with main_client:
             main_client.loop.run_until_complete(main())
