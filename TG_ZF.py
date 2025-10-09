@@ -139,6 +139,9 @@ current_client_index = 0
 # 账号频道访问权限缓存
 account_channel_access = {}
 
+# 账号FloodWait状态缓存
+account_floodwait_status = {}
+
 # ---------- 公共工具函数 ----------
 def get_channel_key(src_id, dst_id):
     """生成标准化的频道键"""
@@ -317,6 +320,33 @@ def switch_to_next_account():
     print(f"🔄 切换账号: {old_account} → {new_account}")
     return True
 
+def switch_to_available_account():
+    """切换到可用的账号（非FloodWait状态）"""
+    global current_client_index
+    if not enable_account_rotation or len(clients) <= 1:
+        return False
+    
+    original_index = current_client_index
+    original_account = clients[original_index]["account"]["session_name"]
+    
+    # 尝试所有账号，找到非FloodWait状态的账号
+    for i in range(len(clients)):
+        test_index = (original_index + i + 1) % len(clients)
+        test_account = clients[test_index]["account"]["session_name"]
+        
+        # 检查这个账号是否处于FloodWait状态
+        if not is_account_in_floodwait(test_account):
+            current_client_index = test_index
+            print(f"🔄 切换到可用账号: {original_account} → {test_account}")
+            return True
+        else:
+            remaining = get_account_floodwait_remaining(test_account)
+            print(f"⚠️ 账号 {test_account} 处于FloodWait状态，剩余 {remaining} 秒")
+    
+    # 如果所有账号都处于FloodWait状态，保持当前账号
+    print(f"⚠️ 所有账号都处于FloodWait状态，保持使用账号: {original_account}")
+    return False
+
 async def switch_to_accessible_account(src_dialog, dst_dialog):
     """切换到可访问指定频道的账号"""
     global current_client_index
@@ -372,6 +402,148 @@ def clear_account_channel_access_cache():
     """清空账号频道访问权限缓存"""
     global account_channel_access
     account_channel_access.clear()
+
+def set_account_floodwait_status(account_name, seconds):
+    """设置账号FloodWait状态"""
+    global account_floodwait_status
+    import time
+    account_floodwait_status[account_name] = {
+        "floodwait_until": time.time() + seconds,
+        "seconds": seconds
+    }
+
+def is_account_in_floodwait(account_name):
+    """检查账号是否处于FloodWait状态"""
+    global account_floodwait_status
+    if account_name not in account_floodwait_status:
+        return False
+    
+    import time
+    floodwait_info = account_floodwait_status[account_name]
+    if time.time() >= floodwait_info["floodwait_until"]:
+        # FloodWait已过期，清除状态
+        del account_floodwait_status[account_name]
+        return False
+    
+    return True
+
+def get_account_floodwait_remaining(account_name):
+    """获取账号FloodWait剩余时间"""
+    global account_floodwait_status
+    if account_name not in account_floodwait_status:
+        return 0
+    
+    import time
+    floodwait_info = account_floodwait_status[account_name]
+    remaining = floodwait_info["floodwait_until"] - time.time()
+    return max(0, int(remaining))
+
+def clear_account_floodwait_cache():
+    """清空账号FloodWait状态缓存"""
+    global account_floodwait_status
+    account_floodwait_status.clear()
+
+def clear_client_entity_cache(client):
+    """清除客户端实体缓存"""
+    try:
+        if hasattr(client, '_entity_cache'):
+            client._entity_cache.clear()
+            print(f"🔄 已清除客户端实体缓存")
+    except Exception as e:
+        print(f"⚠️ 清除实体缓存失败: {e}")
+
+async def refresh_channel_entity(client, channel_id):
+    """刷新频道实体"""
+    try:
+        # 清除特定频道的缓存
+        if hasattr(client, '_entity_cache'):
+            # 查找并删除相关缓存
+            keys_to_remove = []
+            for key in client._entity_cache.keys():
+                if str(key) == str(channel_id) or str(key).endswith(str(channel_id)):
+                    keys_to_remove.append(key)
+            
+            for key in keys_to_remove:
+                del client._entity_cache[key]
+            
+            if keys_to_remove:
+                print(f"🔄 已清除频道 {channel_id} 的实体缓存")
+        
+        # 重新获取频道实体
+        entity = await client.get_entity(channel_id)
+        print(f"✅ 成功刷新频道实体: {get_channel_name(entity)}")
+        return entity
+    except Exception as e:
+        print(f"⚠️ 刷新频道实体失败: {e}")
+        return None
+
+async def refresh_dialog_object(client, dialog):
+    """刷新dialog对象，确保使用当前账号的正确实体"""
+    try:
+        # 清除相关缓存
+        if hasattr(client, '_entity_cache'):
+            keys_to_remove = []
+            for key in client._entity_cache.keys():
+                if str(key) == str(dialog.id) or str(key).endswith(str(dialog.id)):
+                    keys_to_remove.append(key)
+            
+            for key in keys_to_remove:
+                del client._entity_cache[key]
+            
+            if keys_to_remove:
+                print(f"🔄 已清除dialog {dialog.id} 的实体缓存")
+        
+        # 重新获取dialog对象
+        new_entity = await client.get_entity(dialog.id)
+        
+        # 创建新的dialog对象
+        new_dialog = type('Dialog', (), {
+            'id': dialog.id,
+            'entity': new_entity,
+            'title': get_channel_name(new_entity) if new_entity else f"频道 {dialog.id}"
+        })()
+        
+        print(f"✅ 成功刷新dialog对象: {get_channel_name(new_dialog)}")
+        return new_dialog
+    except Exception as e:
+        print(f"⚠️ 刷新dialog对象失败: {e}")
+        return dialog
+
+async def refresh_message_objects(client, messages):
+    """刷新消息对象，确保使用当前账号的正确实体"""
+    try:
+        if not messages:
+            return messages
+        
+        # 获取消息所在的频道ID
+        channel_id = messages[0].chat_id if hasattr(messages[0], 'chat_id') else None
+        if not channel_id:
+            return messages
+        
+        # 刷新频道实体
+        new_entity = await refresh_channel_entity(client, channel_id)
+        if not new_entity:
+            return messages
+        
+        # 重新获取消息对象
+        refreshed_messages = []
+        for msg in messages:
+            try:
+                # 使用新的频道实体重新获取消息
+                new_msg = await client.get_messages(new_entity, ids=msg.id)
+                if new_msg:
+                    refreshed_messages.append(new_msg)
+                else:
+                    refreshed_messages.append(msg)  # 如果获取失败，使用原消息
+            except Exception as e:
+                print(f"⚠️ 刷新消息 {msg.id} 失败: {e}")
+                refreshed_messages.append(msg)  # 如果获取失败，使用原消息
+        
+        print(f"✅ 成功刷新 {len(refreshed_messages)} 条消息对象")
+        return refreshed_messages
+    except Exception as e:
+        print(f"⚠️ 刷新消息对象失败: {e}")
+        return messages
 
 def should_rotate_account():
     """判断是否应该轮换账号"""
@@ -1557,12 +1729,53 @@ async def forward_message_safe(dst, msg):
     
     while True:
         try:
-            await client.forward_messages(dst, msg)
+            # 直接使用频道ID而不是dialog对象，避免实体不匹配问题
+            dst_id = dst.id if hasattr(dst, 'id') else dst
+            await client.forward_messages(dst_id, msg)
             increment_account_counter()
             return True, None
         except errors.FloodWaitError as e:
-            print(f"⏸ FloodWait ({account_info['session_name']})，需要等待 {e.seconds} 秒")
+            account_name = account_info['session_name']
+            print(f"⏸ FloodWait ({account_name})，需要等待 {e.seconds} 秒")
+            
+            # 记录当前账号的FloodWait状态
+            set_account_floodwait_status(account_name, e.seconds)
+            
+            # 显示所有账号的FloodWait状态
+            print(f"📊 当前账号FloodWait状态:")
+            for i, client_data in enumerate(clients):
+                acc_name = client_data["account"]["session_name"]
+                is_flood = is_account_in_floodwait(acc_name)
+                remaining = get_account_floodwait_remaining(acc_name)
+                status = f"FloodWait({remaining}s)" if is_flood else "可用"
+                current_mark = " ← 当前" if i == current_client_index else ""
+                print(f"  {acc_name}: {status}{current_mark}")
+            
+            # 如果等待时间超过30秒，尝试切换到可用账号
+            if e.seconds > 30 and len(clients) > 1:
+                print(f"🔄 FloodWait时间过长，尝试切换到可用账号")
+                # 尝试切换到非FloodWait状态的账号
+                if switch_to_available_account():
+                    await asyncio.sleep(account_delay)
+                    # 重新获取当前账号信息，确保使用正确的账号
+                    client = get_current_client()
+                    account_info = get_current_account_info()
+                    
+                    # 清除新账号的实体缓存，避免使用旧账号的缓存实体
+                    clear_client_entity_cache(client)
+                    
+                    # 刷新目标频道dialog对象，确保使用新账号的正确实体
+                    try:
+                        dst = await refresh_dialog_object(client, dst)
+                    except Exception as e:
+                        print(f"⚠️ 刷新目标频道dialog失败: {e}")
+                    
+                    continue  # 使用新账号重试
+                else:
+                    print(f"⚠️ 所有账号都处于FloodWait状态，等待 {e.seconds} 秒")
+            
             await asyncio.sleep(e.seconds + 5)
+            # FloodWait结束后继续重试，不跳过消息
         except errors.ChatWriteForbiddenError:
             print(f"🚫 无法转发消息 {msg.id} ({account_info['session_name']}): 目标频道禁止写入")
             return False, "chat_write_forbidden"
@@ -1584,12 +1797,59 @@ async def forward_group_safe(dst, msgs):
     
     while True:
         try:
-            await client.forward_messages(dst, msgs)
+            # 直接使用频道ID而不是dialog对象，避免实体不匹配问题
+            dst_id = dst.id if hasattr(dst, 'id') else dst
+            await client.forward_messages(dst_id, msgs)
             increment_account_counter()
             return True, None
         except errors.FloodWaitError as e:
-            print(f"⏸ FloodWait ({account_info['session_name']})，需要等待 {e.seconds} 秒")
+            account_name = account_info['session_name']
+            print(f"⏸ FloodWait ({account_name})，需要等待 {e.seconds} 秒")
+            
+            # 记录当前账号的FloodWait状态
+            set_account_floodwait_status(account_name, e.seconds)
+            
+            # 显示所有账号的FloodWait状态
+            print(f"📊 当前账号FloodWait状态:")
+            for i, client_data in enumerate(clients):
+                acc_name = client_data["account"]["session_name"]
+                is_flood = is_account_in_floodwait(acc_name)
+                remaining = get_account_floodwait_remaining(acc_name)
+                status = f"FloodWait({remaining}s)" if is_flood else "可用"
+                current_mark = " ← 当前" if i == current_client_index else ""
+                print(f"  {acc_name}: {status}{current_mark}")
+            
+            # 如果等待时间超过30秒，尝试切换到可用账号
+            if e.seconds > 30 and len(clients) > 1:
+                print(f"🔄 FloodWait时间过长，尝试切换到可用账号")
+                # 尝试切换到非FloodWait状态的账号
+                if switch_to_available_account():
+                    await asyncio.sleep(account_delay)
+                    # 重新获取当前账号信息，确保使用正确的账号
+                    client = get_current_client()
+                    account_info = get_current_account_info()
+                    
+                    # 清除新账号的实体缓存，避免使用旧账号的缓存实体
+                    clear_client_entity_cache(client)
+                    
+                    # 刷新目标频道dialog对象，确保使用新账号的正确实体
+                    try:
+                        dst = await refresh_dialog_object(client, dst)
+                    except Exception as e:
+                        print(f"⚠️ 刷新目标频道dialog失败: {e}")
+                    
+                    # 刷新消息对象，确保使用新账号的正确实体
+                    try:
+                        msgs = await refresh_message_objects(client, msgs)
+                    except Exception as e:
+                        print(f"⚠️ 刷新消息对象失败: {e}")
+                    
+                    continue  # 使用新账号重试
+                else:
+                    print(f"⚠️ 所有账号都处于FloodWait状态，等待 {e.seconds} 秒")
+            
             await asyncio.sleep(e.seconds + 5)
+            # FloodWait结束后继续重试，不跳过消息
         except errors.ChatWriteForbiddenError:
             print(f"🚫 无法转发相册 {msgs[0].grouped_id if msgs else 'unknown'} ({account_info['session_name']}): 目标频道禁止写入")
             return False, "chat_write_forbidden"
@@ -1867,8 +2127,12 @@ async def forward_from_single_source(src_dialog, dst_dialog):
     try:
         # 获取频道实体用于消息迭代
         try:
-            channel_entity = await client.get_entity(src_dialog.id)
-            message_iter = client.iter_messages(channel_entity, reverse=True, offset_id=last_forwarded_id, limit=max_messages)
+            # 先尝试刷新频道实体，确保使用当前账号的正确实体
+            channel_entity = await refresh_channel_entity(client, src_dialog.id)
+            if channel_entity:
+                message_iter = client.iter_messages(channel_entity, reverse=True, offset_id=last_forwarded_id, limit=max_messages)
+            else:
+                raise Exception("无法刷新频道实体")
         except Exception as entity_e:
             print(f"⚠️ 无法获取频道实体，使用dialog对象: {entity_e}")
             try:
@@ -2082,6 +2346,9 @@ async def main():
     
     # 清空账号频道访问权限缓存
     clear_account_channel_access_cache()
+    
+    # 清空账号FloodWait状态缓存
+    clear_account_floodwait_cache()
     
     # 检查账号配置
     if not clients:
