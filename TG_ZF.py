@@ -347,7 +347,7 @@ def switch_to_next_account():
     return True
 
 def switch_to_available_account():
-    """切换到可用的账号（非FloodWait状态）"""
+    """切换到可用的账号（非FloodWait状态），或选择等待时间最短的账号"""
     global current_client_index
     if not enable_account_rotation or len(clients) <= 1:
         return False
@@ -355,7 +355,7 @@ def switch_to_available_account():
     original_index = current_client_index
     original_account = clients[original_index]["account"]["session_name"]
     
-    # 尝试所有账号，找到非FloodWait状态的账号
+    # 第一轮：尝试找到非FloodWait状态的账号
     for i in range(len(clients)):
         test_index = (original_index + i + 1) % len(clients)
         test_account = clients[test_index]["account"]["session_name"]
@@ -369,9 +369,28 @@ def switch_to_available_account():
             remaining = get_account_floodwait_remaining(test_account)
             print(f"⚠️ 账号 {test_account} 处于FloodWait状态，剩余 {remaining} 秒")
     
-    # 如果所有账号都处于FloodWait状态，保持当前账号
-    print(f"⚠️ 所有账号都处于FloodWait状态，保持使用账号: {original_account}")
-    return False
+    # 第二轮：如果所有账号都处于FloodWait状态，选择等待时间最短的账号
+    print(f"⚠️ 所有账号都处于FloodWait状态")
+    min_wait_time = float('inf')
+    min_wait_index = original_index
+    min_wait_account = original_account
+    
+    for i, client_data in enumerate(clients):
+        account_name = client_data["account"]["session_name"]
+        remaining = get_account_floodwait_remaining(account_name)
+        if remaining < min_wait_time:
+            min_wait_time = remaining
+            min_wait_index = i
+            min_wait_account = account_name
+    
+    # 如果找到了等待时间更短的账号，则切换
+    if min_wait_index != original_index:
+        current_client_index = min_wait_index
+        print(f"🔄 切换到等待时间最短的账号: {original_account}({get_account_floodwait_remaining(original_account)}s) → {min_wait_account}({min_wait_time}s)")
+        return True
+    else:
+        print(f"⚠️ 保持使用当前账号: {original_account} (等待时间: {min_wait_time}s)")
+        return False
 
 async def switch_to_accessible_account(src_dialog, dst_dialog):
     """切换到可访问指定频道的账号"""
