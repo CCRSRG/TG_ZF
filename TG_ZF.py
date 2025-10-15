@@ -1518,134 +1518,161 @@ async def validate_preset_channels(client, source_channels, target_channel):
     
     return validated_sources, validated_target
 
-# ---------- 频道信息导出函数 ----------
-async def export_channels_to_json(client, account_name):
-    """导出指定账号的所有频道信息为JSON格式"""
+# ---------- 对话信息导出函数 ----------
+async def export_all_dialogs_to_json(client, account_name):
+    """导出指定账号的所有对话信息为JSON格式（包括频道、群组、机器人、私聊等）"""
     try:
-        print(f"🔍 正在获取账号 {account_name} 的频道信息...")
+        print(f"🔍 正在获取账号 {account_name} 的所有对话信息...")
         
         # 获取所有对话
         dialogs = await client.get_dialogs()
         
-        # 过滤出频道和群组
-        channels = []
+        # 不再过滤，导出所有对话
+        all_dialogs = []
         for dialog in dialogs:
-            # 检查是否为频道或群组
-            if hasattr(dialog.entity, 'megagroup') or hasattr(dialog.entity, 'broadcast'):
-                channels.append(dialog)
+            all_dialogs.append(dialog)
         
-        # 构建频道信息字典
-        channel_info = {}
+        # 构建对话信息字典
+        dialog_info = {}
         
-        # 获取频道总数
-        total_channels = len(channels)
+        # 获取对话总数
+        total_dialogs = len(all_dialogs)
         
-        for index, dialog in enumerate(channels, 1):
+        for index, dialog in enumerate(all_dialogs, 1):
             try:
                 entity = dialog.entity
-                original_name = entity.title if hasattr(entity, 'title') else "未知频道"
-                # 使用与手动选择相同的ID格式
-                channel_id = dialog.id
                 
-                # 处理频道名字：在前面加上频道个数，然后只显示第一个字和最后一个字，中间用***代替
+                # 识别对话类型
+                dialog_type = ""
+                if hasattr(entity, 'broadcast') and entity.broadcast:
+                    dialog_type = "[频道]"
+                elif hasattr(entity, 'megagroup') and entity.megagroup:
+                    dialog_type = "[群组]"
+                elif hasattr(entity, 'bot') and entity.bot:
+                    dialog_type = "[机器人]"
+                elif hasattr(entity, 'first_name') or hasattr(entity, 'last_name'):
+                    dialog_type = "[私聊]"
+                else:
+                    dialog_type = "[其他]"
+                
+                # 获取对话名称
+                if hasattr(entity, 'title') and entity.title:
+                    original_name = entity.title
+                elif hasattr(entity, 'first_name'):
+                    # 私聊用户名称
+                    first_name = entity.first_name or ""
+                    last_name = entity.last_name or ""
+                    original_name = f"{first_name} {last_name}".strip()
+                elif hasattr(entity, 'username'):
+                    original_name = entity.username
+                else:
+                    original_name = f"未知{dialog_type}"
+                
+                # 使用与手动选择相同的ID格式
+                dialog_id = dialog.id
+                
+                # 处理对话名字：在前面加上对话个数和类型，然后只显示第一个字和最后一个字，中间用***代替
                 if len(original_name) <= 2:
                     # 如果名字只有1-2个字符，直接显示
-                    channel_name = f"{index}/{total_channels} {original_name}"
+                    dialog_name = f"{index}/{total_dialogs} {dialog_type} {original_name}"
                 else:
                     # 显示第一个字 + *** + 最后一个字
                     masked_name = original_name[0] + "***" + original_name[-1]
-                    channel_name = f"{index}/{total_channels} {masked_name}"
+                    dialog_name = f"{index}/{total_dialogs} {dialog_type} {masked_name}"
                 
-                # 获取完整的频道ID（保持原始格式）
-                full_channel_id = channel_id
+                # 获取完整的对话ID（保持原始格式）
+                full_dialog_id = dialog_id
                 
-                # 尝试获取频道链接
-                channel_link = None
+                # 尝试获取对话链接
+                dialog_link = None
                 if hasattr(entity, 'username') and entity.username:
-                    # 有用户名的频道，使用用户名链接
-                    channel_link = f"https://t.me/{entity.username}"
-                else:
-                    # 没有用户名的频道，尝试获取邀请链接
+                    # 有用户名的对话，使用用户名链接
+                    dialog_link = f"https://t.me/{entity.username}"
+                elif dialog_type in ["[频道]", "[群组]"]:
+                    # 频道和群组尝试获取邀请链接或消息链接
                     try:
                         # 尝试通过API获取邀请链接
                         try:
                             # 先获取实体，再访问邀请链接属性
                             entity_obj = await client.get_entity(entity)
                             if hasattr(entity_obj, 'invite_link') and entity_obj.invite_link:
-                                channel_link = entity_obj.invite_link
+                                dialog_link = entity_obj.invite_link
                             else:
                                 # 尝试生成邀请链接
                                 invite_link = await client.export_chat_invite_link(entity)
                                 if invite_link:
-                                    channel_link = invite_link
+                                    dialog_link = invite_link
                                 else:
-                                    # 没有邀请链接，尝试获取频道中任意一条消息的链接
+                                    # 没有邀请链接，尝试获取消息链接
                                     try:
-                                        # 获取频道中的一条消息
+                                        # 获取对话中的一条消息
                                         messages = await client.get_messages(entity, limit=1)
                                         if messages and messages[0].id:
                                             # 生成消息链接
-                                            if str(full_channel_id).startswith('-100'):
-                                                short_id = str(full_channel_id)[4:]  # 移除-100前缀
+                                            if str(full_dialog_id).startswith('-100'):
+                                                short_id = str(full_dialog_id)[4:]  # 移除-100前缀
                                             else:
-                                                short_id = str(full_channel_id)
-                                            channel_link = f"https://t.me/c/{short_id}/{messages[0].id}"
+                                                short_id = str(full_dialog_id)
+                                            dialog_link = f"https://t.me/c/{short_id}/{messages[0].id}"
                                         else:
-                                            channel_link = f"频道ID: {full_channel_id}"
+                                            dialog_link = f"对话ID: {full_dialog_id}"
                                     except:
-                                        channel_link = f"频道ID: {full_channel_id}"
+                                        dialog_link = f"对话ID: {full_dialog_id}"
                         except:
                             # 如果无法获取邀请链接，尝试获取消息链接
                             try:
                                 messages = await client.get_messages(entity, limit=1)
                                 if messages and messages[0].id:
-                                    if str(full_channel_id).startswith('-100'):
-                                        short_id = str(full_channel_id)[4:]
+                                    if str(full_dialog_id).startswith('-100'):
+                                        short_id = str(full_dialog_id)[4:]
                                     else:
-                                        short_id = str(full_channel_id)
-                                    channel_link = f"https://t.me/c/{short_id}/{messages[0].id}"
+                                        short_id = str(full_dialog_id)
+                                    dialog_link = f"https://t.me/c/{short_id}/{messages[0].id}"
                                 else:
-                                    channel_link = f"频道ID: {full_channel_id}"
+                                    dialog_link = f"对话ID: {full_dialog_id}"
                             except:
-                                channel_link = f"频道ID: {full_channel_id}"
+                                dialog_link = f"对话ID: {full_dialog_id}"
                     except:
                         # 备用方案：尝试获取消息链接
                         try:
                             messages = await client.get_messages(entity, limit=1)
                             if messages and messages[0].id:
-                                if str(full_channel_id).startswith('-100'):
-                                    short_id = str(full_channel_id)[4:]
+                                if str(full_dialog_id).startswith('-100'):
+                                    short_id = str(full_dialog_id)[4:]
                                 else:
-                                    short_id = str(full_channel_id)
-                                channel_link = f"https://t.me/c/{short_id}/{messages[0].id}"
+                                    short_id = str(full_dialog_id)
+                                dialog_link = f"https://t.me/c/{short_id}/{messages[0].id}"
                             else:
-                                channel_link = f"频道ID: {full_channel_id}"
+                                dialog_link = f"对话ID: {full_dialog_id}"
                         except:
-                            channel_link = f"频道ID: {full_channel_id}"
+                            dialog_link = f"对话ID: {full_dialog_id}"
+                else:
+                    # 私聊、机器人等其他类型，直接显示ID
+                    dialog_link = f"对话ID: {full_dialog_id}"
                 
-                # 格式：频道名字：频道id-频道链接
-                # 确保频道ID包含完整的-100前缀
-                channel_info[channel_name] = f"{full_channel_id}-{channel_link}"
+                # 格式：对话名字：对话id-对话链接
+                # 确保对话ID包含完整的格式
+                dialog_info[dialog_name] = f"{full_dialog_id}-{dialog_link}"
                 
             except Exception as e:
-                print(f"⚠️ 处理频道 {get_channel_name(dialog)} 时出错: {e}")
+                print(f"⚠️ 处理对话 {get_channel_name(dialog)} 时出错: {e}")
                 continue
         
-        return channel_info
+        return dialog_info
         
     except Exception as e:
-        print(f"❌ 导出频道信息时发生错误: {e}")
+        print(f"❌ 导出对话信息时发生错误: {e}")
         return {}
 
-async def export_all_accounts_channels():
-    """导出所有账号的频道信息"""
+async def export_all_accounts_dialogs():
+    """导出所有账号的对话信息（包括频道、群组、机器人、私聊等）"""
     if not clients:
         print("❌ 没有可用的账号！")
         return
     
-    print("🚀 开始导出所有账号的频道信息...")
+    print("🚀 开始导出所有账号的对话信息...")
     
-    all_accounts_channels = {}
+    all_accounts_dialogs = {}
     
     for i, client_data in enumerate(clients):
         if not client_data["enabled"]:
@@ -1659,32 +1686,32 @@ async def export_all_accounts_channels():
             await client.start()
             print(f"✅ 账号 {account_name} 启动成功")
             
-            # 导出频道信息
-            channel_info = await export_channels_to_json(client, account_name)
-            all_accounts_channels[account_name] = channel_info
+            # 导出对话信息
+            dialog_info = await export_all_dialogs_to_json(client, account_name)
+            all_accounts_dialogs[account_name] = dialog_info
             
-            print(f"📋 账号 {account_name} 导出完成: {len(channel_info)} 个频道")
+            print(f"📋 账号 {account_name} 导出完成: {len(dialog_info)} 个对话")
             
         except Exception as e:
             print(f"❌ 账号 {account_name} 导出失败: {e}")
-            all_accounts_channels[account_name] = {}
+            all_accounts_dialogs[account_name] = {}
     
     # 保存到JSON文件
-    output_file = "channels_export.json"
+    output_file = "dialogs_export.json"
     try:
         with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(all_accounts_channels, f, indent=2, ensure_ascii=False)
+            json.dump(all_accounts_dialogs, f, indent=2, ensure_ascii=False)
         
-        print(f"\n✅ 频道信息已导出到: {output_file}")
+        print(f"\n✅ 对话信息已导出到: {output_file}")
         print(f"📊 导出统计:")
         
-        total_channels = 0
-        for account_name, channels in all_accounts_channels.items():
-            channel_count = len(channels)
-            total_channels += channel_count
-            print(f"  {account_name}: {channel_count} 个频道")
+        total_dialogs = 0
+        for account_name, dialogs in all_accounts_dialogs.items():
+            dialog_count = len(dialogs)
+            total_dialogs += dialog_count
+            print(f"  {account_name}: {dialog_count} 个对话")
         
-        print(f"  总计: {total_channels} 个频道")
+        print(f"  总计: {total_dialogs} 个对话")
         
     except Exception as e:
         print(f"❌ 保存导出文件时发生错误: {e}")
@@ -2515,14 +2542,14 @@ async def main():
     current_account = get_current_account_info()
     print(f"📱 当前使用账号: {current_account['session_name']}")
     
-    # 检查是否需要自动导出频道信息
+    # 检查是否需要自动导出对话信息
     if auto_export_channels:
         print(f"\n{'='*60}")
-        print("🚀 自动导出频道信息...")
+        print("🚀 自动导出对话信息...")
         print(f"{'='*60}")
-        await export_all_accounts_channels()
+        await export_all_accounts_dialogs()
         print(f"\n{'='*60}")
-        print("✅ 频道信息导出完成，程序退出")
+        print("✅ 对话信息导出完成，程序退出")
         print(f"{'='*60}")
         return
     
@@ -2974,10 +3001,10 @@ async def export_only():
         print("❌ 没有可用的账号！请检查账号配置。")
         return
     
-    print("🚀 频道信息导出工具")
+    print("🚀 对话信息导出工具")
     print("="*60)
     
-    await export_all_accounts_channels()
+    await export_all_accounts_dialogs()
 
 # ---------- 独立清理脚本 ----------
 async def clean_only():
@@ -3003,7 +3030,7 @@ if __name__ == "__main__":
         if command == "export":
             # 独立导出模式
             print("="*60)
-            print("📤 频道信息导出模式")
+            print("📤 对话信息导出模式")
             print("="*60)
             with main_client:
                 main_client.loop.run_until_complete(export_only())
@@ -3018,7 +3045,7 @@ if __name__ == "__main__":
             print(f"❌ 未知命令: {command}")
             print(f"💡 可用命令:")
             print(f"   - python TG_ZF.py         # 正常转发模式")
-            print(f"   - python TG_ZF.py export  # 导出频道信息")
+            print(f"   - python TG_ZF.py export  # 导出对话信息（频道、群组、机器人、私聊等）")
             print(f"   - python TG_ZF.py clean   # 清理违规消息")
             exit(1)
     else:
