@@ -2377,7 +2377,7 @@ async def forward_from_single_source(src_dialog, dst_dialog):
             
             # 每处理一定数量的消息后显示批量统计
             if total_messages % batch_size == 0:
-                print(f"📈 进度: {total_messages} 条 | ✅ 转发:{forwarded_count} ❌ 广告:{ad_filtered_count}  内容:{content_filtered_count}  重复:{duplicate_filtered_count}  白名单:{whitelist_filtered_count}  跳过相册:{duplicate_albums_skipped}  错误:{error_count}")
+                print(f"📈 进度: {total_messages} 条 | ✅ 转发:{forwarded_count} ❌ 广告:{ad_filtered_count}  内容:{content_filtered_count}  重复:{duplicate_filtered_count}  非白名单:{whitelist_filtered_count}  跳过相册:{duplicate_albums_skipped}  错误:{error_count}")
             
             # 跳过服务消息
             if msg.message is None and not msg.media:
