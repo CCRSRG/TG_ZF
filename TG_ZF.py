@@ -126,6 +126,12 @@ max_repeat_chars = config["content_filter"]["max_repeat_chars"]
 min_meaningful_length = config["content_filter"]["min_meaningful_length"]
 max_emoji_ratio = config["content_filter"]["max_emoji_ratio"]
 
+# 白名单过滤配置
+enable_whitelist_filter = config["whitelist_filter"]["enable_whitelist_filter"]
+whitelist_keywords = config["whitelist_filter"]["whitelist_keywords"]
+whitelist_case_sensitive = config["whitelist_filter"]["case_sensitive"]
+whitelist_match_media_messages = config["whitelist_filter"]["match_media_messages"]
+
 # 去重配置
 enable_content_deduplication = config["deduplication"]["enable_content_deduplication"]
 dedup_history_file = config["deduplication"]["dedup_history_file"]
@@ -234,7 +240,7 @@ def get_meaningful_chars_count(text):
 
 def create_result(src_dialog, status, reason="", total_messages=0, forwarded_count=0, 
                  ad_filtered_count=0, content_filtered_count=0, duplicate_filtered_count=0, 
-                 duplicate_albums_skipped=0, error_count=0):
+                 whitelist_filtered_count=0, duplicate_albums_skipped=0, error_count=0):
     """创建统一的结果格式"""
     return {
         "source_name": get_channel_name(src_dialog),
@@ -246,25 +252,26 @@ def create_result(src_dialog, status, reason="", total_messages=0, forwarded_cou
         "ad_filtered_count": ad_filtered_count,
         "content_filtered_count": content_filtered_count,
         "duplicate_filtered_count": duplicate_filtered_count,
+        "whitelist_filtered_count": whitelist_filtered_count,
         "duplicate_albums_skipped": duplicate_albums_skipped,
         "error_count": error_count
     }
 
 def create_skipped_result(src_dialog, reason, total_messages=0, forwarded_count=0, 
                          ad_filtered_count=0, content_filtered_count=0, 
-                         duplicate_filtered_count=0, error_count=0):
+                         duplicate_filtered_count=0, whitelist_filtered_count=0, error_count=0):
     """创建跳过结果的标准格式"""
     return create_result(src_dialog, "skipped", reason, total_messages, forwarded_count,
                         ad_filtered_count, content_filtered_count, duplicate_filtered_count, 
-                        0, error_count)
+                        whitelist_filtered_count, 0, error_count)
 
 def create_completed_result(src_dialog, total_messages, forwarded_count, 
                            ad_filtered_count, content_filtered_count, 
-                           duplicate_filtered_count, duplicate_albums_skipped, error_count):
+                           duplicate_filtered_count, whitelist_filtered_count, duplicate_albums_skipped, error_count):
     """创建完成结果的标准格式"""
     return create_result(src_dialog, "completed", "", total_messages, forwarded_count,
                         ad_filtered_count, content_filtered_count, duplicate_filtered_count,
-                        duplicate_albums_skipped, error_count)
+                        whitelist_filtered_count, duplicate_albums_skipped, error_count)
 
 def generate_media_hash_content(msg):
     """为消息生成媒体哈希内容"""
@@ -861,13 +868,13 @@ def get_filtered_stats(src_id, dst_id):
     channel_key = get_channel_key(src_id, dst_id)
     
     if channel_key not in history:
-        return {"ad_filtered": 0, "content_filtered": 0, "service_filtered": 0, "duplicate_filtered": 0}
+        return {"ad_filtered": 0, "content_filtered": 0, "service_filtered": 0, "duplicate_filtered": 0, "whitelist_filtered": 0}
     
     data = history[channel_key]
     filtered_messages = data.get("filtered_messages", [])
     duplicate_messages = data.get("duplicate_messages", [])
     
-    stats = {"ad_filtered": 0, "content_filtered": 0, "service_filtered": 0, "duplicate_filtered": len(duplicate_messages)}
+    stats = {"ad_filtered": 0, "content_filtered": 0, "service_filtered": 0, "duplicate_filtered": len(duplicate_messages), "whitelist_filtered": 0}
     for record in filtered_messages:
         if record.endswith("-ad"):
             stats["ad_filtered"] += 1
@@ -875,6 +882,8 @@ def get_filtered_stats(src_id, dst_id):
             stats["content_filtered"] += 1
         elif record.endswith("-service"):
             stats["service_filtered"] += 1
+        elif record.endswith("-whitelist"):
+            stats["whitelist_filtered"] += 1
     
     return stats
 
@@ -1031,6 +1040,44 @@ def get_content_filter_reason(text, has_media=False):
             reasons.append("单字符重复")
     
     return "; ".join(reasons) if reasons else "未知原因"
+
+# ---------- 白名单过滤函数 ----------
+def is_whitelist_message(text, has_media=False):
+    """检测消息是否通过白名单过滤"""
+    if not enable_whitelist_filter:
+        return True  # 如果未启用白名单过滤，则所有消息都通过
+    
+    # 如果没有文本内容
+    if not text:
+        # 如果启用了对纯媒体消息的白名单过滤，则过滤掉
+        if whitelist_match_media_messages:
+            return False
+        else:
+            return True  # 否则允许纯媒体消息通过
+    
+    # 准备搜索的文本
+    search_text = text if whitelist_case_sensitive else text.lower()
+    
+    # 检查是否包含任何白名单关键词
+    for keyword in whitelist_keywords:
+        search_keyword = keyword if whitelist_case_sensitive else keyword.lower()
+        if search_keyword in search_text:
+            return True
+    
+    return False
+
+def get_whitelist_filter_reason(text, has_media=False):
+    """获取白名单过滤的原因"""
+    if not enable_whitelist_filter:
+        return "白名单过滤未启用"
+    
+    if not text:
+        if whitelist_match_media_messages:
+            return "纯媒体消息且未匹配白名单关键词"
+        else:
+            return "纯媒体消息（白名单不适用）"
+    
+    return f"未包含任何白名单关键词: {whitelist_keywords}"
 
 # ---------- 内容去重函数 ----------
 def generate_message_hash(msg):
@@ -2281,6 +2328,7 @@ async def forward_from_single_source(src_dialog, dst_dialog):
     ad_filtered_count = 0
     content_filtered_count = 0
     duplicate_filtered_count = 0
+    whitelist_filtered_count = 0
     duplicate_albums_skipped = 0  # 完全重复的相册数量
     error_count = 0
     
@@ -2322,7 +2370,7 @@ async def forward_from_single_source(src_dialog, dst_dialog):
             
             # 每处理一定数量的消息后显示批量统计
             if total_messages % batch_size == 0:
-                print(f"📈 进度: {total_messages} 条 | ✅ 转发:{forwarded_count} ❌ 广告:{ad_filtered_count}  内容:{content_filtered_count}  重复:{duplicate_filtered_count}  跳过相册:{duplicate_albums_skipped}  错误:{error_count}")
+                print(f"📈 进度: {total_messages} 条 | ✅ 转发:{forwarded_count} ❌ 广告:{ad_filtered_count}  内容:{content_filtered_count}  重复:{duplicate_filtered_count}  白名单:{whitelist_filtered_count}  跳过相册:{duplicate_albums_skipped}  错误:{error_count}")
             
             # 跳过服务消息
             if msg.message is None and not msg.media:
@@ -2387,6 +2435,16 @@ async def forward_from_single_source(src_dialog, dst_dialog):
                 # print(f"🚫 过滤无媒体无文本: {msg.id}")
                 content_filtered_count += 1
                 add_filtered_record(src_dialog.id, dst_dialog.id, msg.id, reason, "content")
+                save_progress(src_dialog.id, dst_dialog.id, msg.id)
+                continue
+            
+            # 白名单过滤：检查消息是否包含白名单关键词
+            if enable_whitelist_filter and not is_whitelist_message(msg.message, has_media):
+                reason = get_whitelist_filter_reason(msg.message, has_media)
+                media_info = "有媒体" if has_media else "无媒体"
+                # print(f"🚫 白名单过滤: {msg.id} ({media_info}) - {reason}")
+                whitelist_filtered_count += 1
+                add_filtered_record(src_dialog.id, dst_dialog.id, msg.id, reason, "whitelist")
                 save_progress(src_dialog.id, dst_dialog.id, msg.id)
                 continue
 
@@ -2477,7 +2535,7 @@ async def forward_from_single_source(src_dialog, dst_dialog):
                     # 检查是否是受保护聊天错误，如果是则立即跳过频道
                     if error_type == "protected_chat":
                         print(f"🚫 检测到受保护的聊天，跳过频道 {get_channel_name(src_dialog)}")
-                        return create_skipped_result(src_dialog, PROTECTED_CHAT_REASON, total_messages, forwarded_count, ad_filtered_count, content_filtered_count, duplicate_filtered_count, error_count)
+                        return create_skipped_result(src_dialog, PROTECTED_CHAT_REASON, total_messages, forwarded_count, ad_filtered_count, content_filtered_count, duplicate_filtered_count, whitelist_filtered_count, error_count)
 
         # 收尾
         if group_buffer:
@@ -2499,7 +2557,7 @@ async def forward_from_single_source(src_dialog, dst_dialog):
 
     return create_completed_result(src_dialog, total_messages, forwarded_count,
                                   ad_filtered_count, content_filtered_count,
-                                  duplicate_filtered_count, duplicate_albums_skipped, error_count)
+                                  duplicate_filtered_count, whitelist_filtered_count, duplicate_albums_skipped, error_count)
 
 # ---------- 主逻辑 ----------
 async def main():
@@ -2688,6 +2746,7 @@ async def main():
     total_all_ad_filtered = 0
     total_all_content_filtered = 0
     total_all_duplicate_filtered = 0
+    total_all_whitelist_filtered = 0
     total_all_duplicate_albums_skipped = 0
     total_all_errors = 0
 
@@ -2705,6 +2764,7 @@ async def main():
         total_all_ad_filtered += result["ad_filtered_count"]
         total_all_content_filtered += result["content_filtered_count"]
         total_all_duplicate_filtered += result["duplicate_filtered_count"]
+        total_all_whitelist_filtered += result.get("whitelist_filtered_count", 0)
         total_all_duplicate_albums_skipped += result.get("duplicate_albums_skipped", 0)
         total_all_errors += result["error_count"]
         
@@ -2729,16 +2789,18 @@ async def main():
     print(f"成功转发: {total_all_forwarded}")
 
     
-    total_all_filtered = total_all_ad_filtered + total_all_content_filtered + total_all_duplicate_filtered
+    total_all_filtered = total_all_ad_filtered + total_all_content_filtered + total_all_duplicate_filtered + total_all_whitelist_filtered
     if total_all_messages > 0:
         ad_rate = (total_all_ad_filtered / total_all_messages * 100)
         content_rate = (total_all_content_filtered / total_all_messages * 100)
         duplicate_rate = (total_all_duplicate_filtered / total_all_messages * 100)
+        whitelist_rate = (total_all_whitelist_filtered / total_all_messages * 100)
         total_rate = (total_all_filtered / total_all_messages * 100)
         success_rate = (total_all_forwarded / total_all_messages * 100)
         print(f"广告过滤率: {ad_rate:.1f}%")
         print(f"内容过滤率: {content_rate:.1f}%")
         print(f"重复过滤率: {duplicate_rate:.1f}%")
+        print(f"白名单过滤率: {whitelist_rate:.1f}%")
         print(f"总过滤率: {total_rate:.1f}%")
         print(f"成功率: {success_rate:.1f}%")
     
@@ -2750,7 +2812,7 @@ async def main():
         if result["status"] == "skipped":
             print(f"     跳过原因: {result['reason']}")
         else:
-            print(f"     转发: {result['forwarded_count']} | 广告过滤: {result['ad_filtered_count']} | 内容过滤: {result['content_filtered_count']} | 重复过滤: {result['duplicate_filtered_count']} | 跳过相册: {result.get('duplicate_albums_skipped', 0)} | 错误: {result['error_count']}")
+            print(f"     转发: {result['forwarded_count']} | 广告过滤: {result['ad_filtered_count']} | 内容过滤: {result['content_filtered_count']} | 重复过滤: {result['duplicate_filtered_count']} | 白名单过滤: {result.get('whitelist_filtered_count', 0)} | 跳过相册: {result.get('duplicate_albums_skipped', 0)} | 错误: {result['error_count']}")
     
     # 显示全局去重统计
     if enable_content_deduplication:

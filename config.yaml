@@ -106,6 +106,15 @@ content_filter:
   min_meaningful_length: 5         # 最小有意义内容长度
   max_emoji_ratio: 0.5             # 最大表情符号比例
 
+# ============ 白名单过滤配置 ============
+whitelist_filter:
+  enable_whitelist_filter: false   # 是否启用白名单过滤
+  whitelist_keywords: [            # 白名单关键词列表，消息必须包含其中至少一个关键词才会被转发
+    "aaaa"                         # 示例关键词，可根据需要修改
+  ]
+  case_sensitive: false            # 是否区分大小写
+  match_media_messages: true       # 是否对纯媒体消息也应用白名单过滤（当消息没有文本时）
+
 # ============ 内容去重配置 ============
 deduplication:
   enable_content_deduplication: true  # 是否启用内容去重
