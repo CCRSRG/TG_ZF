@@ -1077,6 +1077,13 @@ def get_whitelist_filter_reason(text, has_media=False):
         else:
             return "纯媒体消息（白名单不适用）"
     
+    # 检查是否真的包含白名单关键词
+    search_text = text if whitelist_case_sensitive else text.lower()
+    for keyword in whitelist_keywords:
+        search_keyword = keyword if whitelist_case_sensitive else keyword.lower()
+        if search_keyword in search_text:
+            return f"包含白名单关键词: {keyword}"
+    
     return f"未包含任何白名单关键词: {whitelist_keywords}"
 
 # ---------- 内容去重函数 ----------
@@ -2404,49 +2411,56 @@ async def forward_from_single_source(src_dialog, dst_dialog):
             has_media = msg.media is not None
             has_text = msg.message is not None and msg.message.strip()
             
-            # 广告过滤（只对有文本内容的消息进行）
-            if has_text and enable_ad_filter and is_ad_message(msg.message, has_media):
-                reason = get_ad_reason(msg.message, has_media)
-                media_info = "有媒体" if has_media else "无媒体"
-                # print(f"🚫 过滤广告: {msg.id} ({media_info}) - {reason}")
-                ad_filtered_count += 1
-                # 记录过滤原因
-                add_filtered_record(src_dialog.id, dst_dialog.id, msg.id, reason, "ad")
-                # 仍然保存进度，避免重复检查
-                save_progress(src_dialog.id, dst_dialog.id, msg.id)
-                continue
-            
-            # 内容质量过滤（只对有文本内容的消息进行）
-            if has_text and enable_content_filter and is_meaningless_message(msg.message, has_media):
-                reason = get_content_filter_reason(msg.message, has_media)
-                media_info = "有媒体" if has_media else "无媒体"
-                # print(f"🗑️ 过滤无意义内容: {msg.id} ({media_info}) - {reason}")
-                content_filtered_count += 1
-                # 记录过滤原因
-                add_filtered_record(src_dialog.id, dst_dialog.id, msg.id, reason, "content")
-                # 仍然保存进度，避免重复检查
-                save_progress(src_dialog.id, dst_dialog.id, msg.id)
-                continue
-            
-            # 媒体内容过滤：如果启用了媒体要求过滤，且消息没有媒体内容，则过滤掉
-            if enable_media_required_filter and not has_media and not has_text:
-                # 既没有媒体也没有文本的消息，直接过滤
-                reason = "无媒体无文本内容"
-                # print(f"🚫 过滤无媒体无文本: {msg.id}")
-                content_filtered_count += 1
-                add_filtered_record(src_dialog.id, dst_dialog.id, msg.id, reason, "content")
-                save_progress(src_dialog.id, dst_dialog.id, msg.id)
-                continue
-            
-            # 白名单过滤：检查消息是否包含白名单关键词
-            if enable_whitelist_filter and not is_whitelist_message(msg.message, has_media):
-                reason = get_whitelist_filter_reason(msg.message, has_media)
-                media_info = "有媒体" if has_media else "无媒体"
-                # print(f"🚫 白名单过滤: {msg.id} ({media_info}) - {reason}")
-                whitelist_filtered_count += 1
-                add_filtered_record(src_dialog.id, dst_dialog.id, msg.id, reason, "whitelist")
-                save_progress(src_dialog.id, dst_dialog.id, msg.id)
-                continue
+            # 白名单过滤：最高优先级，如果通过白名单则跳过所有其他过滤
+            if enable_whitelist_filter and is_whitelist_message(msg.message, has_media):
+                # 消息包含白名单关键词，直接通过，跳过所有其他内容过滤
+                pass
+            else:
+                # 消息不包含白名单关键词，进行其他过滤检查
+                
+                # 白名单过滤：检查消息是否包含白名单关键词（非白名单消息）
+                if enable_whitelist_filter and not is_whitelist_message(msg.message, has_media):
+                    reason = get_whitelist_filter_reason(msg.message, has_media)
+                    media_info = "有媒体" if has_media else "无媒体"
+                    # print(f"🚫 白名单过滤: {msg.id} ({media_info}) - {reason}")
+                    whitelist_filtered_count += 1
+                    add_filtered_record(src_dialog.id, dst_dialog.id, msg.id, reason, "whitelist")
+                    save_progress(src_dialog.id, dst_dialog.id, msg.id)
+                    continue
+                
+                # 广告过滤（只对有文本内容的消息进行）
+                if has_text and enable_ad_filter and is_ad_message(msg.message, has_media):
+                    reason = get_ad_reason(msg.message, has_media)
+                    media_info = "有媒体" if has_media else "无媒体"
+                    # print(f"🚫 过滤广告: {msg.id} ({media_info}) - {reason}")
+                    ad_filtered_count += 1
+                    # 记录过滤原因
+                    add_filtered_record(src_dialog.id, dst_dialog.id, msg.id, reason, "ad")
+                    # 仍然保存进度，避免重复检查
+                    save_progress(src_dialog.id, dst_dialog.id, msg.id)
+                    continue
+                
+                # 内容质量过滤（只对有文本内容的消息进行）
+                if has_text and enable_content_filter and is_meaningless_message(msg.message, has_media):
+                    reason = get_content_filter_reason(msg.message, has_media)
+                    media_info = "有媒体" if has_media else "无媒体"
+                    # print(f"🗑️ 过滤无意义内容: {msg.id} ({media_info}) - {reason}")
+                    content_filtered_count += 1
+                    # 记录过滤原因
+                    add_filtered_record(src_dialog.id, dst_dialog.id, msg.id, reason, "content")
+                    # 仍然保存进度，避免重复检查
+                    save_progress(src_dialog.id, dst_dialog.id, msg.id)
+                    continue
+                
+                # 媒体内容过滤：如果启用了媒体要求过滤，且消息没有媒体内容，则过滤掉
+                if enable_media_required_filter and not has_media and not has_text:
+                    # 既没有媒体也没有文本的消息，直接过滤
+                    reason = "无媒体无文本内容"
+                    # print(f"🚫 过滤无媒体无文本: {msg.id}")
+                    content_filtered_count += 1
+                    add_filtered_record(src_dialog.id, dst_dialog.id, msg.id, reason, "content")
+                    save_progress(src_dialog.id, dst_dialog.id, msg.id)
+                    continue
 
             # 处理相册
             if msg.grouped_id:
