@@ -1,0 +1,3 @@
+telethon>=1.28.0
+pyyaml>=6.0
+PySocks>=1.7.1

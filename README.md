@@ -34,11 +34,18 @@
 
 ### 1. 环境要求
 - Python 3.7+
-- Telegram API 凭据（[如何获取](#获取-api-凭据)）
+- Telegram API 凭据（[如何获取](#3-获取-api-凭据)）
 
 ### 2. 安装依赖
+
 ```bash
-pip install telethon pyyaml PySocks
+pip install -r requirements.txt
+```
+
+或手动安装：
+
+```bash
+pip install telethon>=1.28.0 pyyaml>=6.0 PySocks>=1.7.1
 ```
 
 ### 3. 获取 API 凭据
@@ -48,6 +55,12 @@ pip install telethon pyyaml PySocks
 4. 创建新应用获取 `api_id` 和 `api_hash`
 
 ### 4. 配置文件
+
+复制示例配置文件并修改：
+
+```bash
+cp config.yaml.example config.yaml
+```
 
 编辑 `config.yaml` 文件：
 
@@ -61,10 +74,17 @@ proxy:
 
 # ============ 账号配置 ============
 accounts:
+  # 账号 1（必填）
   - api_id: 你的API_ID            # 替换为你的 API ID
-    api_hash: "你的API_Hash"       # 替换为你的 API Hash   可使用默认配置
+    api_hash: "你的API_Hash"       # 替换为你的 API Hash
     session_name: forward_session_1
     enabled: true
+  
+  # 账号 2（可选，用于轮换）
+  # - api_id: 第二个API_ID
+  #   api_hash: "第二个API_Hash"
+  #   session_name: forward_session_2
+  #   enabled: true
 
 # ============ 频道配置 ============
 channels:
@@ -104,6 +124,25 @@ python TG_ZF.py clean
 📊 预计剩余待转发: 7367 条消息
 📊 历史转发统计: 总计 487 条 (单条: 487, 相册: 0)
 📈 进度: 100 条 | ✅ 转发:89 🚫 广告:2 🗑️ 内容:0 🔄 重复:1 🎯 白名单:5 📚 相册:8 ❌ 错误:0
+```
+
+---
+
+## 📁 项目结构
+
+```
+TG_ZF/
+├── TG_ZF.py                  # 主程序
+├── config.yaml.example       # 配置文件模板
+├── config.yaml               # 配置文件（需自行删除config.yaml.example后缀）
+├── requirements.txt          # Python 依赖
+├── README.md                 # 说明文档
+├── .gitignore                # Git 忽略文件
+│
+├── forward_history.json      # [自动生成] 转发历史记录（包含进度）
+├── dedup_history.json        # [自动生成] 去重历史记录
+├── channels_export.json      # [自动生成] 频道信息导出
+└── forward_session_*.session # [自动生成] Telegram 会话文件
 ```
 
 ---
@@ -179,23 +218,14 @@ linked_channel:
   force_forward_linked_channels: true     # 强制转发关联频道内容
 ```
 
----
-
-## 📁 文件说明
-
-### 核心文件
-- `TG_ZF.py` - 主程序
-- `config.yaml` - 配置文件（支持注释）
-- `README.md` - 说明文档
-
-### 数据文件（自动生成）
-- `forward_history.json` - 转发历史记录（包含进度）
-- `dedup_history.json` - 去重历史记录
-- `channels_export.json` - 频道信息导出文件
-
-### 会话文件（自动生成）
-- `forward_session_*.session` - Telegram 会话文件
-- `forward_session_*.session-journal` - 会话日志
+### 清理配置
+```yaml
+clean:
+  auto_clean_violations: false     # 设置为 true 时，自动清理违规消息
+  scan_limit: null                 # 清理扫描范围（条消息），null 表示全部
+  batch_size: 100                  # 每次扫描的消息数量
+  delay: 1                         # 删除消息的延迟（秒）
+```
 
 ---
 
@@ -232,6 +262,12 @@ linked_channel:
 📈 进度: 100 条 | ✅ 转发:89 🚫 广告:2 🗑️ 内容:0 🔄 重复:1 🎯 白名单:5
 ```
 
+### 清理违规消息
+使用 `python TG_ZF.py clean` 命令可以：
+- 扫描目标频道的历史消息
+- 根据当前过滤规则识别违规内容
+- 自动删除不符合规则的消息
+
 ---
 
 ## 📊 统计信息示例
@@ -265,8 +301,8 @@ linked_channel:
 ### Q: 程序提示"配置文件不存在"
 **A**: 需要先创建配置文件：
 ```bash
-# 如果有 config.yaml，直接使用
-# 如果没有，创建一个新的配置文件并填入你的账号信息
+cp config.yaml.example config.yaml
+# 然后编辑 config.yaml 填入你的账号信息
 ```
 
 ### Q: 程序提示"没有可用的账号"
@@ -321,6 +357,13 @@ whitelist_filter:
 - **广告过滤**：过滤掉包含广告关键词的消息（黑名单模式）
 - **白名单过滤**：只转发包含指定关键词的消息（白名单模式）
 - 两种过滤可以同时使用，消息需要同时通过两种过滤才会被转发
+
+### Q: 如何清理目标频道的违规消息
+**A**: 运行清理命令：
+```bash
+python TG_ZF.py clean
+```
+程序会根据当前配置的过滤规则，扫描并删除目标频道中不符合规则的历史消息。
 
 ---
 

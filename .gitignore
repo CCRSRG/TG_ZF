@@ -1,0 +1,12 @@
+channels_export.json
+dialogs_export.json
+forward_session.session-journal
+forward_session.session
+.vscode
+forward_session_1.session
+forward_session_1.session-journal
+forward_session_2.session
+forward_session_2.session-journal
+.ipynb_checkpoints
+__pycache__
+config.yaml
