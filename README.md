@@ -1,8 +1,14 @@
-# Telegram 频道信息转发工具 (TG_ZF)
+# Telegram 消息转发与频道群组导出备份工具 (TG_ZF)
 
-一个功能强大的 Telegram 频道内容转发工具，支持多账号轮换、智能过滤、内容去重等高级功能。
+一个功能强大的 Telegram 工具，支持**频道消息转发**（多账号轮换、智能过滤、内容去重）和**对话信息导出**（频道、群组、机器人、私聊等）。
 
 ## ✨ 主要功能
+
+### 📤 对话信息导出
+- **多类型导出**：支持导出频道、群组、机器人、私聊等所有对话类型
+- **多账号导出**：自动遍历所有配置的账号并导出各自的对话
+- **完整信息**：导出对话ID、名称、链接等详细信息
+- **JSON格式**：输出为结构化的JSON文件，便于后续处理
 
 ### 🔄 消息转发
 - **多账号支持**：配置多个 Telegram 账号，自动轮换使用
@@ -110,11 +116,13 @@ python TG_ZF.py
 # Please enter your phone (or bot token): +86 186xxxxxxxx
 # Please enter the code you received: 12345
 
-# 仅导出频道信息
+# 导出对话信息（频道、群组、机器人、私聊等）
 python TG_ZF.py export
 
 # 清理违规消息
 python TG_ZF.py clean
+
+# 导出后的对话信息保存在 dialogs_export.json 中
 ```
 
 ### 6. 运行效果
@@ -141,7 +149,8 @@ TG_ZF/
 │
 ├── forward_history.json      # [自动生成] 转发历史记录（包含进度）
 ├── dedup_history.json        # [自动生成] 去重历史记录
-├── channels_export.json      # [自动生成] 频道信息导出
+├── dialogs_export.json       # [自动生成] 对话信息导出（含频道/群组/机器人/私聊）
+├── channels_export.json      # [自动生成] 频道信息导出（仅频道）
 └── forward_session_*.session # [自动生成] Telegram 会话文件
 ```
 
@@ -227,6 +236,43 @@ clean:
   delay: 1                         # 删除消息的延迟（秒）
 ```
 
+### 对话导出配置
+```yaml
+export:
+  auto_export_channels: false     # 设置为 true 时，程序启动时自动导出对话信息
+```
+
+#### 导出文件格式说明
+
+运行 `python TG_ZF.py export` 后，会生成 `dialogs_export.json` 文件，格式如下：
+
+```json
+{
+  "账号名称": {
+    "序号/总数 [类型] 对话名称": "对话ID-对话链接"
+  }
+}
+```
+
+**对话类型：**
+- `[频道]` - Telegram 频道
+- `[群组]` - Telegram 群组
+- `[机器人]` - Bot 机器人
+- `[私聊]` - 私人聊天
+- `[其他]` - 其他类型
+
+**示例：**
+```json
+{
+  "forward_session_1": {
+    "1/80 [频道] C***组": "-1002143008111-https://t.me/example_channel",
+    "2/80 [群组] 中***索": "-1001739922930-https://t.me/example_group",
+    "3/80 [机器人] B***r": "93372553-https://t.me/BotFather",
+    "4/80 [私聊] 用户名": "123456789-对话ID: 123456789"
+  }
+}
+```
+
 ---
 
 ## 🎯 使用场景
@@ -242,6 +288,9 @@ clean:
 
 ### 4. 内容去重
 避免重复转发相同内容，保持目标频道整洁。
+
+### 5. 对话信息备份
+使用导出功能快速备份所有账号的对话列表，包含频道、群组、机器人、私聊等完整信息，便于管理和查阅。
 
 ---
 
