@@ -1573,21 +1573,41 @@ async def validate_preset_channels(client, source_channels, target_channel):
     return validated_sources, validated_target
 
 # ---------- 对话信息导出函数 ----------
+async def fetch_all_dialogs(client):
+    """获取全部对话，兼容不同 Telethon 版本的归档/分页参数。"""
+    dialogs_by_id = {}
+    fetch_stats = []
+
+    async def collect_dialogs(label, **kwargs):
+        count = 0
+        try:
+            async for dialog in client.iter_dialogs(limit=None, **kwargs):
+                dialogs_by_id[dialog.id] = dialog
+                count += 1
+            fetch_stats.append(f"{label}: {count}")
+        except TypeError:
+            fetch_stats.append(f"{label}: 当前 Telethon 版本不支持该参数")
+        except Exception as e:
+            fetch_stats.append(f"{label}: 获取失败({e})")
+
+    await collect_dialogs("全部对话")
+    await collect_dialogs("归档对话", archived=True)
+
+    return list(dialogs_by_id.values()), fetch_stats
+
 async def export_all_dialogs_to_json(client, account_name):
     """导出指定账号的所有对话信息为JSON格式（包括频道、群组、机器人、私聊等）"""
     try:
         print(f"🔍 正在获取账号 {account_name} 的所有对话信息...")
         
-        # 获取所有对话
-        dialogs = await client.get_dialogs()
-        
-        # 不再过滤，导出所有对话
-        all_dialogs = []
-        for dialog in dialogs:
-            all_dialogs.append(dialog)
+        # 显式迭代全部对话，并额外合并归档对话，避免 get_dialogs 默认范围导致数量固定。
+        all_dialogs, fetch_stats = await fetch_all_dialogs(client)
+        if fetch_stats:
+            print(f"📥 对话拉取统计: {'；'.join(fetch_stats)}")
         
         # 构建对话信息字典
         dialog_info = {}
+        skipped_count = 0
         
         # 获取对话总数
         total_dialogs = len(all_dialogs)
@@ -1709,8 +1729,12 @@ async def export_all_dialogs_to_json(client, account_name):
                 dialog_info[dialog_name] = f"{full_dialog_id}-{dialog_link}"
                 
             except Exception as e:
+                skipped_count += 1
                 print(f"⚠️ 处理对话 {get_channel_name(dialog)} 时出错: {e}")
                 continue
+
+        if skipped_count:
+            print(f"⚠️ 有 {skipped_count} 个对话处理失败，未写入导出文件")
         
         return dialog_info
         
@@ -1774,9 +1798,11 @@ async def export_all_accounts_dialogs():
 async def choose_dialog(title: str):
     client = get_current_client()
     account_info = get_current_account_info()
-    dialogs = await client.get_dialogs()
+    dialogs, fetch_stats = await fetch_all_dialogs(client)
     print(f"\n=== 请选择 {title} ===")
     print(f"📱 当前账号: {account_info['session_name']}")
+    if fetch_stats:
+        print(f"📥 对话拉取统计: {'；'.join(fetch_stats)}")
     for i, dialog in enumerate(dialogs, 1):
         name = get_channel_name(dialog)
         print(f"{i}. {name} ({dialog.id})")
@@ -1794,9 +1820,11 @@ async def choose_multiple_dialogs(title: str):
     """选择多个频道/群组"""
     client = get_current_client()
     account_info = get_current_account_info()
-    dialogs = await client.get_dialogs()
+    dialogs, fetch_stats = await fetch_all_dialogs(client)
     print(f"\n=== 请选择多个 {title} ===")
     print(f"📱 当前账号: {account_info['session_name']}")
+    if fetch_stats:
+        print(f"📥 对话拉取统计: {'；'.join(fetch_stats)}")
     for i, dialog in enumerate(dialogs, 1):
         name = get_channel_name(dialog)
         print(f"{i}. {name} ({dialog.id})")
