@@ -4,6 +4,7 @@ import os
 import re
 import hashlib
 import sys
+from datetime import datetime
 from telethon import TelegramClient, errors
 
 # ============ 配置加载 ============
@@ -3119,6 +3120,194 @@ async def clean_only():
     
     await clean_all_accounts_violations()
 
+# ---------- 扫描提取 ----------
+EXTRACT_PATTERNS = {
+    "ed2k": r"ed2k://\|[^\r\n]*?\|/(?:\|sources[^\r\n]*?\|/)?",
+    "magnet": r"magnet:\?[^\s<>\"'\u200b，。！？；、（）【】《》]+",
+    "url": r"https?://[^\s<>\"'\u200b，。！？；、（）【】《》]+",
+}
+
+
+def extract_matches(text, patterns):
+    """按规则提取；有捕获组时取第一个组，否则取整个匹配。"""
+    matches = {}
+    for name, pattern in patterns.items():
+        values = []
+        for match in pattern.finditer(text):
+            value = match.group(1) if pattern.groups else match.group(0)
+            if not value or not value.strip():
+                continue
+            value = value.strip()
+            if name in ("url", "magnet"):
+                value = value.rstrip(".,;!?，。；！？")
+                for opening, closing in (("(", ")"), ("[", "]"), ("{", "}")):
+                    while value.endswith(closing) and value.count(closing) > value.count(opening):
+                        value = value[:-1]
+            if value and value not in values:
+                values.append(value)
+        if values:
+            matches[name] = values
+    return matches
+
+
+async def scan_and_extract_links(client, channel, patterns):
+    """扫描历史消息并按规则导出，来源 JSON 按消息关联各项结果。"""
+    entity = getattr(channel, "entity", channel)
+    username = getattr(entity, "username", None)
+    channel_id = channel.id
+    channel_key = re.sub(r"[^\w-]", "_", username or str(channel_id))
+    output_dir = os.path.join("extract_results", f"{channel_key}_{datetime.now():%Y%m%d_%H%M%S_%f}")
+    os.makedirs(output_dir)
+    unique_values = {name: {} for name in patterns}
+    result = {
+        "channel_name": get_channel_name(channel),
+        "channel_id": channel_id,
+        "output_dir": output_dir,
+        "scanned_messages": 0,
+        "complete": False,
+        "error": None,
+        "counts": {},
+        "records": [],
+    }
+
+    def save_results():
+        for name, values in unique_values.items():
+            filename = os.path.join(output_dir, f"{name}.txt")
+            with open(filename + ".tmp", "w", encoding="utf-8") as stream:
+                for value in values:
+                    stream.write(value + "\n")
+            os.replace(filename + ".tmp", filename)
+        result["counts"] = {name: len(values) for name, values in unique_values.items()}
+        filename = os.path.join(output_dir, "sources.json")
+        with open(filename + ".tmp", "w", encoding="utf-8") as stream:
+            json.dump(result, stream, ensure_ascii=False, indent=2)
+        os.replace(filename + ".tmp", filename)
+
+    print(f"\n🔍 开始扫描提取: {get_channel_name(channel)}")
+    print(f"📋 提取规则: {', '.join(patterns)}")
+    last_message_id = 0
+    try:
+        while True:
+            try:
+                async for msg in client.iter_messages(entity, limit=None, offset_id=last_message_id, wait_time=1):
+                    if msg.id is None:
+                        continue
+                    candidates = [getattr(msg, "message", None) or ""]
+                    for text_entity in getattr(msg, "entities", None) or []:
+                        url = getattr(text_entity, "url", None)
+                        if url:
+                            candidates.append(url)
+                    markup = getattr(msg, "reply_markup", None)
+                    for row in getattr(markup, "rows", None) or []:
+                        for button in getattr(row, "buttons", None) or []:
+                            url = getattr(button, "url", None)
+                            if url:
+                                candidates.append(url)
+                    message_matches = {}
+                    for candidate in candidates:
+                        for name, values in extract_matches(candidate, patterns).items():
+                            combined = message_matches.setdefault(name, [])
+                            for value in values:
+                                if value not in combined:
+                                    combined.append(value)
+                                unique_values[name][value] = None
+                    if message_matches:
+                        message_url = None
+                        if username:
+                            message_url = f"https://t.me/{username}/{msg.id}"
+                        elif hasattr(entity, "broadcast") or hasattr(entity, "megagroup"):
+                            short_id = str(channel_id)
+                            if short_id.startswith("-100"):
+                                short_id = short_id[4:]
+                            message_url = f"https://t.me/c/{short_id}/{msg.id}"
+                        date = getattr(msg, "date", None)
+                        result["records"].append({
+                            "message_id": msg.id,
+                            "message_url": message_url,
+                            "date": date.isoformat() if date else None,
+                            "matches": message_matches,
+                        })
+                    result["scanned_messages"] += 1
+                    last_message_id = msg.id
+                    if result["scanned_messages"] % 100 == 0:
+                        total = sum(len(values) for values in unique_values.values())
+                        print(f"📈 已扫描: {result['scanned_messages']} 条 | 去重后结果: {total} 条")
+                    if result["scanned_messages"] % 1000 == 0:
+                        save_results()
+                result["complete"] = True
+                break
+            except errors.FloodWaitError as exc:
+                print(f"⏸ 扫描触发 FloodWait，等待 {exc.seconds} 秒后继续")
+                await asyncio.sleep(exc.seconds + 1)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        result["error"] = "用户取消"
+        print("\n⚠️ 扫描已取消，正在保存已提取结果")
+    except (errors.RPCError, OSError, ValueError, asyncio.TimeoutError) as exc:
+        result["error"] = str(exc)
+        print(f"❌ 扫描中断: {exc}，正在保存已提取结果")
+    finally:
+        save_results()
+
+    print("✅ 扫描提取完成" if result["complete"] else "⚠️ 已保存本次部分结果")
+    print(f"📝 已扫描: {result['scanned_messages']} 条消息")
+    for name, count in result["counts"].items():
+        print(f"  {name}: {count} 条")
+    print(f"📁 输出目录: {os.path.abspath(output_dir)}")
+    return result
+
+
+async def extract_only(channel_identifier=None):
+    """独立扫描提取入口，复用当前账号和现有频道选择。"""
+    if not clients:
+        print("❌ 没有可用的账号！请检查账号配置。")
+        return
+    extract_config = config.get("extract", {})
+    try:
+        if not isinstance(extract_config, dict):
+            raise ValueError("extract 配置必须是对象")
+        selected_types = extract_config.get("types", ["ed2k", "magnet", "url"])
+        custom_patterns = extract_config.get("custom_patterns", [])
+        if not isinstance(selected_types, list) or not isinstance(custom_patterns, list):
+            raise ValueError("extract.types 和 extract.custom_patterns 必须是列表")
+        patterns = {}
+        for name in selected_types:
+            if not isinstance(name, str) or name not in EXTRACT_PATTERNS:
+                raise ValueError(f"未知提取类型: {name}，可用类型: ed2k、magnet、url")
+            patterns[name] = re.compile(EXTRACT_PATTERNS[name], re.IGNORECASE)
+        reserved_names = {"CON", "PRN", "AUX", "NUL"} | {f"{prefix}{number}" for prefix in ("COM", "LPT") for number in range(1, 10)}
+        for rule in custom_patterns:
+            if not isinstance(rule, dict):
+                raise ValueError("自定义规则必须包含 name 和 pattern")
+            name, pattern = rule.get("name"), rule.get("pattern")
+            if not isinstance(name, str) or not re.fullmatch(r"[\w-]+", name) or name.upper() in reserved_names:
+                raise ValueError("规则名称只能包含文字、数字、下划线或连字符，且不能使用 Windows 保留名称")
+            if name in patterns or name in EXTRACT_PATTERNS:
+                raise ValueError(f"规则名称重复或与内置类型冲突: {name}")
+            if not isinstance(pattern, str) or not pattern:
+                raise ValueError(f"规则 {name} 的 pattern 必须是非空正则表达式")
+            patterns[name] = re.compile(pattern)
+        if not patterns:
+            raise ValueError("请至少启用一种提取类型或自定义规则")
+    except (ValueError, re.error) as exc:
+        print(f"❌ 提取配置错误: {exc}")
+        return
+
+    client = get_current_client()
+    if channel_identifier:
+        if isinstance(channel_identifier, str) and re.fullmatch(r"-?\d+", channel_identifier):
+            channel_identifier = int(channel_identifier)
+        channel = await get_channel_by_identifier(client, channel_identifier)
+        if channel is None:
+            print(f"❌ 无法访问频道: {channel_identifier}")
+            return
+    else:
+        channel = await choose_dialog("要扫描提取的频道/群组")
+    try:
+        return await scan_and_extract_links(client, channel, patterns)
+    except OSError as exc:
+        print(f"❌ 无法保存提取结果: {exc}")
+
+
 # ---------- 运行 ----------
 if __name__ == "__main__":
     if not clients:
@@ -3145,12 +3334,34 @@ if __name__ == "__main__":
             print("="*60)
             with main_client:
                 main_client.loop.run_until_complete(clean_only())
+        elif command == "extract":
+            # 独立扫描提取模式
+            print("="*60)
+            print("🔍 频道消息扫描提取模式")
+            print("="*60)
+            if len(sys.argv) > 3:
+                print("❌ 用法: python TG_ZF.py extract [频道链接、用户名或ID]")
+                exit(1)
+            channel_identifier = None
+            if len(sys.argv) == 3:
+                channel_identifier = sys.argv[2]
+            with main_client:
+                extract_task = main_client.loop.create_task(extract_only(channel_identifier))
+                try:
+                    main_client.loop.run_until_complete(extract_task)
+                except KeyboardInterrupt:
+                    extract_task.cancel()
+                    try:
+                        main_client.loop.run_until_complete(extract_task)
+                    except asyncio.CancelledError:
+                        print("\n❌ 扫描提取已取消")
         else:
             print(f"❌ 未知命令: {command}")
             print(f"💡 可用命令:")
             print(f"   - python TG_ZF.py         # 正常转发模式")
             print(f"   - python TG_ZF.py export  # 导出对话信息（频道、群组、机器人、私聊等）")
             print(f"   - python TG_ZF.py clean   # 清理违规消息")
+            print(f"   - python TG_ZF.py extract [频道链接]  # 按配置扫描提取内容")
             exit(1)
     else:
         # 正常模式

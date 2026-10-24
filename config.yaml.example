@@ -133,3 +133,17 @@ linked_channel:
   # 关联频道：这些频道可能是其他频道的关联频道，你的账号没有加入但内容可以转发
   # 启用后，程序会尝试直接转发这些频道的内容，即使无法获取频道实体
 
+# ============ 扫描提取配置 ============
+extract:
+  types: [ed2k, magnet, url]        # 内置类型；只用自定义规则时填写 []
+  custom_patterns: []               # 有捕获组时提取第一个组，否则提取完整匹配
+  # custom_patterns:
+  #   - name: resource_id
+  #     pattern: '\bABC-\d+\b'
+  #   - name: extract_code
+  #     pattern: '提取码[:：][ \t]*([A-Za-z0-9]{4})'
+  #   - name: resource_name
+  #     pattern: '(?m)^资源名称[:：][ \t]*(.+)$'
+  # 结果保存到 extract_results/ 下的独立目录；每条规则一个 TXT，sources.json 记录来源
+  # python TG_ZF.py extract                         # 手动选择频道
+  # python TG_ZF.py extract https://t.me/xxx      # 直接指定频道

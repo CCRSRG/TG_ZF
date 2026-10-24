@@ -1,6 +1,6 @@
-# Telegram 消息转发与频道群组导出备份工具 (TG_ZF)
+# Telegram 消息转发、扫描提取与对话导出工具 (TG_ZF)
 
-一个功能强大的 Telegram 工具，支持**频道消息转发**（多账号轮换、智能过滤、内容去重）和**对话信息导出**（频道、群组、机器人、私聊等）。
+一个 Telegram 工具，支持**频道消息转发**（多账号轮换、智能过滤、内容去重）、**消息内容扫描提取**（常用链接、自定义正则）和**对话信息导出**（频道、群组、机器人、私聊等）。
 
 ## ✨ 主要功能
 
@@ -15,6 +15,14 @@
 - **智能账号切换**：自动跳过无法访问频道的账号
 - **断点续传**：中断后继续转发，不会重复处理
 - **批量处理**：同时处理多个源频道
+
+### 🔎 消息扫描提取
+
+- **内置链接规则**：支持 ed2k、magnet、HTTP/HTTPS 链接
+- **自定义正则**：按规则提取资源编号、名称、提取码等文字内容
+- **多种消息来源**：扫描正文、媒体说明、隐藏链接和按钮链接
+- **分类去重导出**：每条规则保存一个 TXT，JSON 保留来源消息及关联字段
+- **部分结果保存**：取消或扫描失败时保存已提取内容，并标记扫描是否完成
 
 ### 🛡️ 智能过滤
 - **广告过滤**：基于关键词和正则模式识别并过滤广告
@@ -122,6 +130,12 @@ python TG_ZF.py export
 # 清理违规消息
 python TG_ZF.py clean
 
+# 扫描提取，手动选择频道
+python TG_ZF.py extract
+
+# 扫描指定频道，提取内容由 config.yaml 的 extract 配置决定
+python TG_ZF.py extract https://t.me/xxxx
+
 # 导出后的对话信息保存在 dialogs_export.json 中
 ```
 
@@ -151,6 +165,7 @@ TG_ZF/
 ├── dedup_history.json        # [自动生成] 去重历史记录
 ├── dialogs_export.json       # [自动生成] 对话信息导出（含频道/群组/机器人/私聊）
 ├── channels_export.json      # [自动生成] 频道信息导出（仅频道）
+├── extract_results/          # [自动生成] 按频道及时间分目录保存扫描提取结果
 └── forward_session_*.session # [自动生成] Telegram 会话文件
 ```
 
@@ -272,6 +287,133 @@ export:
   }
 }
 ```
+
+---
+
+## 🔎 频道消息扫描提取
+
+扫描提取使用当前账号读取频道历史消息，独立于转发流程，不应用广告、白名单或内容质量过滤规则。扫描范围包括消息正文、媒体说明、隐藏链接和按钮链接；附件文件内容和图片中的文字不在扫描范围内。
+
+### 1. 运行命令
+
+在 Anaconda `py39` 环境中运行：
+
+```bash
+conda activate py39
+
+# 不传频道参数时，使用现有对话列表手动选择
+python TG_ZF.py extract
+
+# 直接指定频道链接
+python TG_ZF.py extract https://t.me/xxxx
+
+# 也可以使用频道用户名或 ID
+python TG_ZF.py extract @example_channel
+python TG_ZF.py extract -1001234567890
+```
+
+**命令参数只决定扫描哪个频道。要改变提取内容，修改 `config.yaml` 中现有的 `extract` 配置段，再运行同一条命令。** 无需重复新增 `extract` 配置段。
+
+### 2. 选择内置提取类型
+
+```yaml
+extract:
+  types: [ed2k, magnet, url]
+  custom_patterns: []
+```
+
+| `types` 配置 | 提取内容 |
+|---|---|
+| `[ed2k]` | ed2k 链接 |
+| `[magnet]` | 磁力链接 |
+| `[url]` | HTTP/HTTPS 网址，包括网盘链接 |
+| `[ed2k, magnet, url]` | 同时提取上述三种链接 |
+| `[]` | 仅使用 `custom_patterns` 中的自定义规则 |
+
+例如，只提取磁力链接时，将现有配置改为：
+
+```yaml
+extract:
+  types: [magnet]
+  custom_patterns: []
+```
+
+然后仍然执行 `python TG_ZF.py extract https://t.me/xxx`。未配置 `extract` 段时，默认启用 ed2k、magnet、url 三种内置规则。
+
+### 3. 使用自定义正则
+
+以下配置只提取资源编号、提取码和资源名称：
+
+```yaml
+extract:
+  types: []
+  custom_patterns:
+    - name: resource_id
+      pattern: '\bABC-\d+\b'
+    - name: extract_code
+      pattern: '提取码[:：][ \t]*([A-Za-z0-9]{4})'
+    - name: resource_name
+      pattern: '(?m)^资源名称[:：][ \t]*(.+)$'
+```
+
+| 消息中的文字 | 规则名称 | 提取结果 |
+|---|---|---|
+| `资源编号：ABC-12345` | `resource_id` | `ABC-12345` |
+| `提取码：aB12` | `extract_code` | `aB12` |
+| `资源名称：示例资源` | `resource_name` | `示例资源` |
+
+- `name` 决定对应 TXT 的文件名，名称必须唯一，不能与内置类型重名；支持文字、数字、下划线和连字符，不能使用 Windows 保留文件名（如 `CON`）。
+- `pattern` 使用 Python 正则表达式。**有捕获组时提取第一个组，否则提取完整匹配**；空匹配会忽略。
+- YAML 中建议用单引号包裹正则，保留 `\b`、`\d`、`\t` 等反斜杠写法。
+- 自定义规则默认区分大小写，可使用 `(?i)` 忽略大小写、`(?m)` 按行匹配。内置链接规则不区分大小写。
+- 内置类型与自定义规则可以同时启用。例如，将上例改为 `types: [url]`，即可同时提取网址及三个自定义字段。
+- `types` 与 `custom_patterns` 不能同时为空；配置中的未知类型或无效正则会在扫描前提示。
+
+### 4. 输出文件与来源信息
+
+每次运行都会在当前工作目录的 `extract_results/` 下创建独立目录，名称包含频道用户名或 ID 和时间戳。例如，启用网址及提取码规则后：
+
+```text
+extract_results/
+└── example_channel_<时间戳>/
+    ├── url.txt
+    ├── extract_code.txt
+    └── sources.json
+```
+
+每条启用的规则都会生成一个 TXT，按提取结果去重；没有匹配结果时，该 TXT 为空。`sources.json` 按消息记录各规则的命中结果，因此同一条消息里的网址、名称和提取码会保存在一起，重复内容的不同来源消息也会保留。
+
+以下为 `sources.json` 的字段节选：
+
+```json
+{
+  "channel_name": "示例频道",
+  "scanned_messages": 100,
+  "complete": true,
+  "error": null,
+  "counts": {
+    "url": 1,
+    "extract_code": 1
+  },
+  "records": [
+    {
+      "message_id": 123,
+      "message_url": "https://t.me/example_channel/123",
+      "matches": {
+        "url": ["https://example.com/a.zip"],
+        "extract_code": ["aB12"]
+      }
+    }
+  ]
+}
+```
+
+### 5. 扫描进度与中断处理
+
+- 每扫描 100 条消息显示进度，每扫描 1000 条消息保存一次结果；完成、取消或扫描出错时也会保存。
+- 触发 Telegram `FloodWait` 时，等待指定时间后从本次已经处理的位置继续。
+- 按 `Ctrl+C` 会保存已提取的部分结果，`sources.json` 中的 `complete` 为 `false`；全部扫描结束后才会标记为 `true`。
+- **提取模式目前不支持跨运行断点续扫。** 重新执行命令会创建新目录，并从最新消息开始重新扫描。
 
 ---
 
